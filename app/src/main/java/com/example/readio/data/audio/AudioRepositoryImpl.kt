@@ -5,7 +5,6 @@ import android.util.Log
 import com.example.readio.domain.model.Chapter
 import com.example.readio.domain.model.ChapterAudio
 import com.example.readio.domain.model.TtsConfig
-import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.AudioRepository
 import com.example.readio.domain.repository.ChapterAudioState
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -36,10 +35,10 @@ class AudioRepositoryImpl @Inject constructor(
                         return@channelFlow
                     }
 
-                val useCache = config.provider != TtsProvider.LOCAL_ANDROID
-                val audioDir = if (useCache) persistentDirFor(chapter.id) else tempDirFor(chapter.id)
+                val persist = config.provider.persistAudio
+                val audioDir = if (persist) persistentDirFor(chapter.id) else tempDirFor(chapter.id)
 
-                if (useCache) {
+                if (persist) {
                     loadCachedAudio(chapter, config, audioDir)?.let {
                         send(ChapterAudioState.Ready(it))
                         return@channelFlow
@@ -63,7 +62,7 @@ class AudioRepositoryImpl @Inject constructor(
                     send(ChapterAudioState.Generating(index + 1, paragraphs.size))
                 }
 
-                if (useCache) saveConfigMeta(audioDir, config)
+                if (persist) saveConfigMeta(audioDir, config)
                 send(ChapterAudioState.Ready(ChapterAudio(chapter.id, files, config)))
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -75,7 +74,7 @@ class AudioRepositoryImpl @Inject constructor(
         }.flowOn(Dispatchers.IO)
 
     override suspend fun hasChapterAudio(chapterId: String, config: TtsConfig): Boolean {
-        if (config.provider == TtsProvider.LOCAL_ANDROID) return false
+        if (!config.provider.persistAudio) return false
         val dir = persistentDirFor(chapterId)
         return dir.exists() && readCacheKey(dir) == config.cacheKey
     }

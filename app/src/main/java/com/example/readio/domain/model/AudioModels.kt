@@ -2,9 +2,9 @@ package com.example.readio.domain.model
 
 import java.io.File
 
-enum class TtsProvider(val displayName: String) {
+enum class TtsProvider(val displayName: String, val persistAudio: Boolean = true) {
     AZURE("Microsoft Azure"),
-    LOCAL_ANDROID("系统 TTS（本地）")
+    LOCAL_ANDROID("系统 TTS（本地）", persistAudio = false)
 }
 
 data class TtsConfig(
