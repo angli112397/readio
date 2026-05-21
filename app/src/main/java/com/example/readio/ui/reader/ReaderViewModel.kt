@@ -177,6 +177,7 @@ class ReaderViewModel @Inject constructor(
                 val startIndex = _uiState.value.currentParagraphIndex
                 var playbackStarted = false
                 val bufferSize = minOf(5, chapter.paragraphCount)
+                val pendingItems = mutableListOf<MediaItem>()
 
                 prepareChapterAudio(chapter).collect { audioState ->
                     when (audioState) {
@@ -187,14 +188,19 @@ class ReaderViewModel @Inject constructor(
                             )
                         }
                         is ChapterAudioState.ParagraphReady -> {
-                            _player.addMediaItem(buildMediaItem(audioState.file))
-                            if (!playbackStarted && _player.mediaItemCount >= startIndex + bufferSize) {
-                                _player.seekTo(startIndex, 0L)
-                                _player.prepare()
-                                _player.play()
-                                playbackStarted = true
-                                _uiState.update { it.copy(audioGenerating = false) }
-                                prefetchNextChapters()
+                            if (!playbackStarted) {
+                                pendingItems += buildMediaItem(audioState.file)
+                                if (pendingItems.size >= startIndex + bufferSize) {
+                                    // Batch-set avoids N rapid EVENT_TIMELINE_CHANGED notifications
+                                    _player.setMediaItems(pendingItems, startIndex, 0L)
+                                    _player.prepare()
+                                    _player.play()
+                                    playbackStarted = true
+                                    _uiState.update { it.copy(audioGenerating = false) }
+                                    prefetchNextChapters()
+                                }
+                            } else {
+                                _player.addMediaItem(buildMediaItem(audioState.file))
                             }
                         }
                         is ChapterAudioState.Ready -> {
