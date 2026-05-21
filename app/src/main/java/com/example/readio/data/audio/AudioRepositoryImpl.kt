@@ -2,8 +2,8 @@ package com.example.readio.data.audio
 
 import android.content.Context
 import android.util.Log
-import com.example.readio.domain.model.ChapterAudio
 import com.example.readio.domain.model.Chapter
+import com.example.readio.domain.model.ChapterAudio
 import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.AudioRepository
@@ -36,11 +36,14 @@ class AudioRepositoryImpl @Inject constructor(
                         return@channelFlow
                     }
 
-                val audioDir = audioDirFor(chapter.id)
+                val useCache = config.provider != TtsProvider.LOCAL_ANDROID
+                val audioDir = if (useCache) persistentDirFor(chapter.id) else tempDirFor(chapter.id)
 
-                loadCachedAudio(chapter, config, audioDir)?.let {
-                    send(ChapterAudioState.Ready(it))
-                    return@channelFlow
+                if (useCache) {
+                    loadCachedAudio(chapter, config, audioDir)?.let {
+                        send(ChapterAudioState.Ready(it))
+                        return@channelFlow
+                    }
                 }
 
                 audioDir.deleteRecursively()
@@ -60,7 +63,7 @@ class AudioRepositoryImpl @Inject constructor(
                     send(ChapterAudioState.Generating(index + 1, paragraphs.size))
                 }
 
-                saveConfigMeta(audioDir, config)
+                if (useCache) saveConfigMeta(audioDir, config)
                 send(ChapterAudioState.Ready(ChapterAudio(chapter.id, files, config)))
 
             } catch (e: kotlinx.coroutines.CancellationException) {
@@ -72,12 +75,13 @@ class AudioRepositoryImpl @Inject constructor(
         }.flowOn(Dispatchers.IO)
 
     override suspend fun hasChapterAudio(chapterId: String, config: TtsConfig): Boolean {
-        val dir = audioDirFor(chapterId)
+        if (config.provider == TtsProvider.LOCAL_ANDROID) return false
+        val dir = persistentDirFor(chapterId)
         return dir.exists() && readCacheKey(dir) == config.cacheKey
     }
 
     override suspend fun clearChapterAudio(chapterId: String) {
-        audioDirFor(chapterId).deleteRecursively()
+        persistentDirFor(chapterId).deleteRecursively()
     }
 
     override suspend fun clearAllAudio() {
@@ -86,7 +90,10 @@ class AudioRepositoryImpl @Inject constructor(
 
     // ---- Cache ----
 
-    private fun audioDirFor(chapterId: String) = File(context.filesDir, "audio/$chapterId")
+    private fun persistentDirFor(chapterId: String) = File(context.filesDir, "audio/$chapterId")
+
+    // Local TTS writes to cacheDir — OS-managed, not counted as user storage
+    private fun tempDirFor(chapterId: String) = File(context.cacheDir, "audio_local/$chapterId")
 
     private fun saveConfigMeta(dir: File, config: TtsConfig) =
         File(dir, "config").writeText(config.cacheKey)
@@ -95,10 +102,10 @@ class AudioRepositoryImpl @Inject constructor(
         File(dir, "config").readText().trim()
     }.getOrNull()
 
-    private fun loadCachedAudio(chapter: Chapter, config: TtsConfig, audioDir: File): ChapterAudio? {
-        if (!audioDir.exists() || readCacheKey(audioDir) != config.cacheKey) return null
+    private fun loadCachedAudio(chapter: Chapter, config: TtsConfig, dir: File): ChapterAudio? {
+        if (!dir.exists() || readCacheKey(dir) != config.cacheKey) return null
         val files = chapter.paragraphs.mapIndexed { index, _ ->
-            File(audioDir, "para_$index.mp3").takeIf { it.exists() } ?: return null
+            File(dir, "para_$index.mp3").takeIf { it.exists() } ?: return null
         }
         return ChapterAudio(chapter.id, files, config)
     }

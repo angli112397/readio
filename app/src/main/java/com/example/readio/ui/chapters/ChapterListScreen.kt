@@ -6,7 +6,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Clear
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
@@ -55,18 +54,20 @@ fun ChapterListScreen(
                     }
                 },
                 actions = {
-                    if (state.isBulkDownloading) {
-                        IconButton(onClick = viewModel::cancelBulkDownload) {
-                            Icon(Icons.Default.Clear, contentDescription = "Cancel download")
-                        }
-                    } else {
-                        IconButton(
-                            onClick = viewModel::downloadAll,
-                            enabled = state.chapters.any {
-                                it.audioStatus !is ChapterAudioStatus.Downloaded
+                    if (!state.isLocalTts) {
+                        if (state.isBulkDownloading) {
+                            IconButton(onClick = viewModel::cancelBulkDownload) {
+                                Icon(Icons.Default.Clear, contentDescription = "Cancel download")
                             }
-                        ) {
-                            Icon(Icons.Default.Download, contentDescription = "Download all")
+                        } else {
+                            IconButton(
+                                onClick = viewModel::downloadAll,
+                                enabled = state.chapters.any {
+                                    it.audioStatus !is ChapterAudioStatus.Downloaded
+                                }
+                            ) {
+                                Icon(Icons.Default.Download, contentDescription = "Download all")
+                            }
                         }
                     }
                 }
@@ -89,6 +90,7 @@ fun ChapterListScreen(
                     itemsIndexed(state.chapters, key = { _, item -> item.chapterIndex.id }) { _, item ->
                         ChapterItem(
                             item = item,
+                            isLocalTts = state.isLocalTts,
                             onClick = { onOpenChapter(item.chapterIndex.id) },
                             onDownload = { viewModel.downloadChapter(item) },
                             onClear = { viewModel.clearChapter(item) }
@@ -104,6 +106,7 @@ fun ChapterListScreen(
 @Composable
 private fun ChapterItem(
     item: ChapterUiItem,
+    isLocalTts: Boolean,
     onClick: () -> Unit,
     onDownload: () -> Unit,
     onClear: () -> Unit
@@ -150,41 +153,43 @@ private fun ChapterItem(
             modifier = Modifier.weight(1f)
         )
 
-        when (val status = item.audioStatus) {
-            is ChapterAudioStatus.NotDownloaded -> {
-                IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Default.Download,
-                        contentDescription = "Download audio",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+        if (!isLocalTts) {
+            when (val status = item.audioStatus) {
+                is ChapterAudioStatus.NotDownloaded -> {
+                    IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.Default.Download,
+                            contentDescription = "Download audio",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
-            }
-            is ChapterAudioStatus.Downloading -> {
-                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(
-                        progress = { status.progress },
-                        modifier = Modifier.size(24.dp),
-                        strokeWidth = 2.5.dp
-                    )
+                is ChapterAudioStatus.Downloading -> {
+                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(
+                            progress = { status.progress },
+                            modifier = Modifier.size(24.dp),
+                            strokeWidth = 2.5.dp
+                        )
+                    }
                 }
-            }
-            is ChapterAudioStatus.Downloaded -> {
-                IconButton(onClick = { showClearDialog = true }, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Default.CheckCircle,
-                        contentDescription = "Delete audio",
-                        tint = MaterialTheme.colorScheme.primary
-                    )
+                is ChapterAudioStatus.Downloaded -> {
+                    IconButton(onClick = { showClearDialog = true }, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete cached audio",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
                 }
-            }
-            is ChapterAudioStatus.Error -> {
-                IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
-                    Icon(
-                        Icons.Default.Warning,
-                        contentDescription = "Retry download",
-                        tint = MaterialTheme.colorScheme.error
-                    )
+                is ChapterAudioStatus.Error -> {
+                    IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
+                        Icon(
+                            Icons.Default.Warning,
+                            contentDescription = "Retry download",
+                            tint = MaterialTheme.colorScheme.error
+                        )
+                    }
                 }
             }
         }
