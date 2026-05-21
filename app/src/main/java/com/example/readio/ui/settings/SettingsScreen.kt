@@ -107,29 +107,31 @@ fun SettingsScreen(
                 }
             }
 
-            // ── API Key ──────────────────────────────────────────────────────
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("API Key", style = MaterialTheme.typography.labelLarge)
-                OutlinedTextField(
-                    value = apiKey,
-                    onValueChange = { apiKey = it },
-                    modifier = Modifier.fillMaxWidth(),
-                    placeholder = { Text("Paste your ${selectedProvider.displayName} key") },
-                    visualTransformation = if (keyVisible) VisualTransformation.None
-                                          else PasswordVisualTransformation(),
-                    trailingIcon = {
-                        IconButton(onClick = { keyVisible = !keyVisible }) {
-                            Icon(
-                                if (keyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                contentDescription = if (keyVisible) "Hide key" else "Show key"
-                            )
-                        }
-                    },
-                    singleLine = true
-                )
+            // ── API Key (cloud providers only) ───────────────────────────────
+            if (selectedProvider != TtsProvider.LOCAL_ANDROID) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("API Key", style = MaterialTheme.typography.labelLarge)
+                    OutlinedTextField(
+                        value = apiKey,
+                        onValueChange = { apiKey = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Paste your ${selectedProvider.displayName} key") },
+                        visualTransformation = if (keyVisible) VisualTransformation.None
+                                              else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { keyVisible = !keyVisible }) {
+                                Icon(
+                                    if (keyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                    contentDescription = if (keyVisible) "Hide key" else "Show key"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+                }
             }
 
-            // ── Region (shown for providers that need it) ────────────────────
+            // ── Region (Azure only) ──────────────────────────────────────────
             if (selectedProvider == TtsProvider.AZURE) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("Region", style = MaterialTheme.typography.labelLarge)

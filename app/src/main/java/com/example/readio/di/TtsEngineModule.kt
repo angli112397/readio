@@ -1,5 +1,6 @@
 package com.example.readio.di
 
+import com.example.readio.data.audio.AndroidTtsEngine
 import com.example.readio.data.audio.AzureTtsEngine
 import com.example.readio.data.audio.TtsEngine
 import dagger.Binds
@@ -12,10 +13,9 @@ import dagger.multibindings.IntoSet
 @InstallIn(SingletonComponent::class)
 abstract class TtsEngineModule {
 
-    @Binds
-    @IntoSet
+    @Binds @IntoSet
     abstract fun bindAzureEngine(impl: AzureTtsEngine): TtsEngine
 
-    // To add a new provider, add one line here:
-    // @Binds @IntoSet abstract fun bindGoogleEngine(impl: GoogleTtsEngine): TtsEngine
+    @Binds @IntoSet
+    abstract fun bindAndroidEngine(impl: AndroidTtsEngine): TtsEngine
 }

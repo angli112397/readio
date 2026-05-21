@@ -3,8 +3,8 @@ package com.example.readio.domain.model
 import java.io.File
 
 enum class TtsProvider(val displayName: String) {
-    AZURE("Microsoft Azure")
-    // Add more providers here — no other files need to change
+    AZURE("Microsoft Azure"),
+    LOCAL_ANDROID("系统 TTS（本地）")
 }
 
 data class TtsConfig(

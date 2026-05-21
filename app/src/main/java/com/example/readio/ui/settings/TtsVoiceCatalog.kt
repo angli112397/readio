@@ -29,7 +29,17 @@ object TtsVoiceCatalog {
             VoiceOption("zh-TW-YunJheNeural",     "台灣普通話 雲哲 男"),
         )
 
-        // Add new providers here — Settings screen picks them up automatically.
+        ,
+
+        TtsProvider.LOCAL_ANDROID to listOf(
+            VoiceOption("zh-CN", "普通话（大陆）"),
+            VoiceOption("zh-TW", "普通話（台灣）"),
+            VoiceOption("zh-HK", "粵語（香港）"),
+            VoiceOption("en-US", "English (US)"),
+            VoiceOption("en-GB", "English (UK)"),
+            VoiceOption("ja-JP", "日本語"),
+            VoiceOption("ko-KR", "한국어"),
+        )
     )
 
     fun defaultVoice(provider: TtsProvider): String =
