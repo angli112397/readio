@@ -1,0 +1,23 @@
+# Credentials — never commit
+local.properties
+
+# Build output
+build/
+app/build/
+.gradle/
+
+# Android Studio
+.idea/
+*.iml
+*.iws
+*.ipr
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystore
+*.jks
+*.keystore
+
+# macOS
+.DS_Store
