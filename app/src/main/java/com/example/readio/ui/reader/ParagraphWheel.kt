@@ -3,9 +3,9 @@ package com.example.readio.ui.reader
 import android.os.Build
 import android.view.HapticFeedbackConstants
 import androidx.compose.foundation.background
-import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.gestures.snapping.rememberSnapFlingBehavior
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.PaddingValues
@@ -41,6 +41,12 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.drop
 import kotlin.math.abs
 
+private fun centerTextAlign(text: String): TextAlign =
+    if (text.count { it in 'A'..'Z' || it in 'a'..'z' } > text.length / 3)
+        TextAlign.Start   // English: left-align, no justification rivers
+    else
+        TextAlign.Justify // CJK: full justification works cleanly with monospace glyphs
+
 @Composable
 fun ChunkWheel(
     chunks: List<Chunk>,
@@ -49,7 +55,7 @@ fun ChunkWheel(
     modifier: Modifier = Modifier,
     fontSize: TextUnit = 16.sp,
     lineHeightMultiplier: Float = 1.5f,
-    onChunkLongPress: ((chunkText: String) -> Unit)? = null
+    onTranslateTap: (() -> Unit)? = null
 ) {
     if (chunks.isEmpty()) return
 
@@ -93,8 +99,18 @@ fun ChunkWheel(
         if (!listState.isScrollInProgress) onCenterChanged(liveCenterIndex)
     }
 
-    // Surface color drives both the gradient overlay and the background.
     val surfaceColor = MaterialTheme.colorScheme.surface
+
+    // Precompute item distances once per frame (O(n)) rather than per item (O(n²)).
+    val distanceMap by remember(listState) {
+        derivedStateOf {
+            val info = listState.layoutInfo
+            val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2f
+            info.visibleItemsInfo.associate { item ->
+                item.index to (abs(item.offset + item.size / 2f - viewportCenter) / item.size)
+            }
+        }
+    }
 
     BoxWithConstraints(modifier = modifier) {
         val itemHeight = maxHeight / 3
@@ -112,32 +128,29 @@ fun ChunkWheel(
                     val isCenter = index == liveCenterIndex
                     val effectiveFontSize = if (isCenter) fontSize else fontSize * 0.85f
                     val lineHeight = effectiveFontSize * lineHeightMultiplier
+                    val chunkTextAlign = if (isCenter) remember(chunk.text) { centerTextAlign(chunk.text) }
+                                        else TextAlign.Center
 
                     Box(
                         modifier = Modifier
                             .height(itemHeight)
                             .fillMaxWidth()
+                            .then(
+                                if (isCenter && onTranslateTap != null)
+                                    Modifier.clickable(
+                                        indication = null,
+                                        interactionSource = remember { MutableInteractionSource() },
+                                        onClick = onTranslateTap
+                                    )
+                                else Modifier
+                            )
                             .graphicsLayer {
-                                val info = listState.layoutInfo
-                                val itemInfo = info.visibleItemsInfo.firstOrNull { it.index == index }
-                                val dist = if (itemInfo != null) {
-                                    val viewportCenter = (info.viewportStartOffset + info.viewportEndOffset) / 2f
-                                    val itemCenter = itemInfo.offset + itemInfo.size / 2f
-                                    abs(itemCenter - viewportCenter) / itemInfo.size
-                                } else 1f
+                                val dist = distanceMap[index] ?: 1f
                                 val scale = (1.05f - dist * 0.15f).coerceIn(0.75f, 1.05f)
                                 scaleX = scale
                                 scaleY = scale
                                 alpha = (1f - dist * 0.55f).coerceAtLeast(0f)
-                            }
-                            .then(
-                                if (onChunkLongPress != null) Modifier.combinedClickable(
-                                    interactionSource = remember { MutableInteractionSource() },
-                                    indication = null,
-                                    onClick = {},
-                                    onLongClick = { onChunkLongPress(chunk.text) }
-                                ) else Modifier
-                            ),
+                            },
                         contentAlignment = Alignment.Center
                     ) {
                         Text(
@@ -149,7 +162,7 @@ fun ChunkWheel(
                             fontWeight = if (isCenter) FontWeight.SemiBold else FontWeight.Normal,
                             color = if (isCenter) MaterialTheme.colorScheme.onSurface
                                     else MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
+                            textAlign = chunkTextAlign,
                             maxLines = if (isCenter) 10 else 3,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.padding(horizontal = 32.dp)

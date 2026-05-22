@@ -118,30 +118,25 @@ class AudioDownloadManager @Inject constructor(
         }
     }
 
+    private fun setStatus(chapterId: String, status: ChapterAudioStatus) =
+        _state.update { it.copy(statusMap = it.statusMap + (chapterId to status)) }
+
     private suspend fun downloadSingle(bookId: String, chapter: ChapterIndex) {
-        _state.update { it.copy(statusMap = it.statusMap + (chapter.id to ChapterAudioStatus.Downloading(0f))) }
+        setStatus(chapter.id, ChapterAudioStatus.Downloading(0f))
         try {
             downloadChapterAudio(bookId, chapter.id).collect { progress ->
-                when (progress) {
-                    is DownloadProgress.InProgress -> _state.update {
-                        it.copy(statusMap = it.statusMap + (chapter.id to
-                            ChapterAudioStatus.Downloading(progress.done.toFloat() / progress.total)))
-                    }
-                    is DownloadProgress.Complete -> _state.update {
-                        it.copy(statusMap = it.statusMap + (chapter.id to ChapterAudioStatus.Downloaded))
-                    }
-                    is DownloadProgress.Failed -> _state.update {
-                        it.copy(statusMap = it.statusMap + (chapter.id to ChapterAudioStatus.Error(progress.message)))
-                    }
-                }
+                setStatus(chapter.id, when (progress) {
+                    is DownloadProgress.InProgress ->
+                        ChapterAudioStatus.Downloading(progress.done.toFloat() / progress.total)
+                    is DownloadProgress.Complete -> ChapterAudioStatus.Downloaded
+                    is DownloadProgress.Failed   -> ChapterAudioStatus.Error(progress.message)
+                })
             }
         } catch (e: kotlinx.coroutines.CancellationException) {
-            _state.update { it.copy(statusMap = it.statusMap + (chapter.id to ChapterAudioStatus.NotDownloaded)) }
+            setStatus(chapter.id, ChapterAudioStatus.NotDownloaded)
             throw e
         } catch (e: Exception) {
-            _state.update {
-                it.copy(statusMap = it.statusMap + (chapter.id to ChapterAudioStatus.Error(e.message ?: "Unknown error")))
-            }
+            setStatus(chapter.id, ChapterAudioStatus.Error(e.message ?: "Unknown error"))
         }
     }
 }

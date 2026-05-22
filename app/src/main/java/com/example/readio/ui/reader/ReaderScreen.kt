@@ -1,7 +1,15 @@
 package com.example.readio.ui.reader
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -81,27 +89,71 @@ fun ReaderScreen(
             )
         }
     ) { padding ->
-        when {
-            state.isLoading -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
-            state.error != null -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    Text(state.error ?: "加载失败", color = MaterialTheme.colorScheme.error)
-                }
-            }
-            else -> {
-                ChunkWheel(
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+        ) {
+            when {
+                state.isLoading -> CircularProgressIndicator(
+                    modifier = Modifier.align(Alignment.Center)
+                )
+                state.error != null -> Text(
+                    text = state.error!!,
+                    color = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.align(Alignment.Center)
+                )
+                else -> ChunkWheel(
                     chunks = state.chapter?.chunks ?: emptyList(),
                     currentIndex = state.currentChunkIndex,
                     onCenterChanged = viewModel::onChunkTap,
                     fontSize = prefs.fontSize.sp,
                     lineHeightMultiplier = prefs.lineHeightMultiplier,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(padding)
+                    onTranslateTap = viewModel::onTranslateTap,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+
+            // Translation card — overlay at top, slides down from TopAppBar
+            AnimatedVisibility(
+                visible = state.wordLookup != null,
+                enter = slideInVertically { -it } + fadeIn(),
+                exit = slideOutVertically { -it } + fadeOut(),
+                modifier = Modifier.align(Alignment.TopCenter)
+            ) {
+                val lookup = state.wordLookup ?: return@AnimatedVisibility
+                WordLookupCard(lookup = lookup)
+            }
+        }
+    }
+}
+
+@Composable
+private fun WordLookupCard(lookup: WordLookup) {
+    Surface(
+        tonalElevation = 8.dp,
+        shadowElevation = 4.dp,
+        modifier = Modifier.fillMaxWidth()
+    ) {
+        Box(
+            modifier = Modifier
+                .padding(horizontal = 20.dp, vertical = 14.dp)
+                .heightIn(max = 80.dp)
+                .verticalScroll(rememberScrollState())
+        ) {
+            when {
+                lookup.isLoading -> CircularProgressIndicator(
+                    modifier = Modifier.size(20.dp),
+                    strokeWidth = 2.dp
+                )
+                lookup.error != null -> Text(
+                    "翻译失败",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.error
+                )
+                lookup.translation != null -> Text(
+                    lookup.translation,
+                    style = MaterialTheme.typography.bodyLarge
                 )
             }
         }

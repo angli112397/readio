@@ -21,6 +21,7 @@ import com.example.readio.domain.repository.ChapterAudioState
 import com.example.readio.domain.repository.EpubRepository
 import com.example.readio.domain.repository.ReadingProgressRepository
 import com.example.readio.domain.repository.SettingsRepository
+import com.example.readio.domain.repository.VocabularyRepository
 import com.example.readio.domain.usecase.DownloadChapterAudioUseCase
 import com.example.readio.domain.usecase.GetReadingPositionUseCase
 import com.example.readio.domain.usecase.PrepareChapterAudioUseCase
@@ -42,6 +43,13 @@ import java.io.File
 import javax.inject.Inject
 import kotlin.coroutines.resume
 
+data class WordLookup(
+    val word: String,
+    val translation: String? = null,
+    val isLoading: Boolean = true,
+    val error: String? = null
+)
+
 data class ReaderUiState(
     val bookTitle: String = "",
     val chapterTitle: String = "",
@@ -54,7 +62,8 @@ data class ReaderUiState(
     val isPlaying: Boolean = false,
     val audioGenerating: Boolean = false,
     val audioProgress: Float = 0f,
-    val audioError: String? = null
+    val audioError: String? = null,
+    val wordLookup: WordLookup? = null
 )
 
 @HiltViewModel
@@ -66,7 +75,8 @@ class ReaderViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val getReadingPosition: GetReadingPositionUseCase,
     private val prepareChapterAudio: PrepareChapterAudioUseCase,
-    private val downloadChapterAudio: DownloadChapterAudioUseCase
+    private val downloadChapterAudio: DownloadChapterAudioUseCase,
+    private val vocabularyRepository: VocabularyRepository
 ) : ViewModel() {
 
     val bookId: String = checkNotNull(savedStateHandle["bookId"])
@@ -87,13 +97,19 @@ class ReaderViewModel @Inject constructor(
     private var chapterLoadJob: Job? = null
     private var audioJob: Job? = null
     private var prefetchJob: Job? = null
+    private var lookupJob: Job? = null
 
     private lateinit var _player: MediaController
+
+    // Set by the player listener when audio drives a chunk transition; consumed in onChunkTap
+    // to suppress the seek-back that would otherwise interrupt ongoing playback.
+    private var lastAudioDrivenIndex = -1
 
     private val playerListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) return
             val newIndex = _player.currentMediaItemIndex
+            lastAudioDrivenIndex = newIndex
             updateChunkIndex(newIndex)
             viewModelScope.launch {
                 val chapter = _uiState.value.chapter ?: return@launch
@@ -119,12 +135,15 @@ class ReaderViewModel @Inject constructor(
                 .onEach { _player.setPlaybackSpeed(it.speechRate) }
                 .launchIn(viewModelScope)
 
-            settingsRepository.observeReadingPreferences()
+            readingPrefs
                 .onEach { prefs ->
                     val chapter = _uiState.value.chapter ?: return@onEach
                     val book = currentBook ?: return@onEach
                     if (prefs.chunkSize != chapter.chunkSize) {
-                        loadChapterAt(book, ReadingPosition(bookId, chapter.id, 0))
+                        chapterLoadJob?.cancel()
+                        chapterLoadJob = viewModelScope.launch {
+                            loadChapterAt(book, ReadingPosition(bookId, chapter.id, 0))
+                        }
                     }
                 }
                 .launchIn(viewModelScope)
@@ -145,7 +164,8 @@ class ReaderViewModel @Inject constructor(
         val state = _uiState.value
         val chapter = state.chapter ?: return
 
-        val isAudioDrivenCallback = state.isPlaying && index == state.currentChunkIndex
+        val isAudioDrivenCallback = index == lastAudioDrivenIndex
+        lastAudioDrivenIndex = -1
 
         updateChunkIndex(index)
         viewModelScope.launch { progressRepository.savePosition(ReadingPosition(bookId, chapter.id, index)) }
@@ -161,6 +181,41 @@ class ReaderViewModel @Inject constructor(
     }
 
     fun dismissAudioError() = _uiState.update { it.copy(audioError = null) }
+
+    fun onTranslateTap() {
+        val state = _uiState.value
+        val chunkText = state.chapter?.chunks?.getOrNull(state.currentChunkIndex)?.text ?: return
+
+        // Toggle: tap again on same chunk while result is shown → dismiss
+        if (state.wordLookup?.word == chunkText && !state.wordLookup.isLoading) {
+            dismissWordLookup()
+            return
+        }
+
+        lookupJob?.cancel()
+        _uiState.update { it.copy(wordLookup = WordLookup(word = chunkText)) }
+        lookupJob = viewModelScope.launch {
+            val targetCode = readingPrefs.value.translationLanguage.code
+            try {
+                val entry = vocabularyRepository.lookup(chunkText, targetCode)
+                _uiState.update { s ->
+                    if (s.wordLookup?.word != chunkText) return@update s
+                    s.copy(wordLookup = s.wordLookup.copy(
+                        translation = entry?.definitions?.firstOrNull() ?: "—",
+                        isLoading = false
+                    ))
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                _uiState.update { s ->
+                    if (s.wordLookup?.word != chunkText) return@update s
+                    s.copy(wordLookup = s.wordLookup.copy(isLoading = false, error = e.message))
+                }
+            }
+        }
+    }
+
+    fun dismissWordLookup() = _uiState.update { it.copy(wordLookup = null) }
 
     fun navigatePrevChapter() = navigateRelative(-1)
     fun navigateNextChapter() = navigateRelative(+1)
@@ -291,7 +346,7 @@ class ReaderViewModel @Inject constructor(
     }
 
     private fun updateChunkIndex(index: Int) {
-        _uiState.update { it.copy(currentChunkIndex = index) }
+        _uiState.update { it.copy(currentChunkIndex = index, wordLookup = null) }
     }
 
     private suspend fun connectToService(): MediaController {
@@ -306,6 +361,7 @@ class ReaderViewModel @Inject constructor(
     override fun onCleared() {
         audioJob?.cancel()
         prefetchJob?.cancel()
+        lookupJob?.cancel()
         if (::_player.isInitialized) {
             _player.stop()
             _player.clearMediaItems()

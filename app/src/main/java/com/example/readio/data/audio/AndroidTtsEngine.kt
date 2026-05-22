@@ -9,6 +9,9 @@ import com.example.readio.domain.model.TtsProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.IOException
@@ -17,7 +20,6 @@ import javax.inject.Inject
 import javax.inject.Singleton
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
-import kotlin.coroutines.suspendCoroutine
 
 @Singleton
 class AndroidTtsEngine @Inject constructor(
@@ -37,40 +39,50 @@ class AndroidTtsEngine @Inject constructor(
         )
     }
 
-    // Cache the last configured voice to avoid redundant setLanguage() calls per sentence.
+    // Mutex serializes all synthesis calls: setLanguage() mutates global TTS engine state,
+    // so voice configuration and synthesizeToFile() must be atomic across coroutines
+    // (e.g. current chapter + prefetch chapter running concurrently on Dispatchers.IO).
+    private val synthesizeMutex = Mutex()
     private var configuredVoice = ""
 
     override suspend fun synthesize(text: String, config: TtsConfig): ByteArray =
         withContext(Dispatchers.IO) {
             initDeferred.await()
-
-            if (config.voice != configuredVoice) {
-                val locale = Locale.forLanguageTag(config.voice)
-                val result = tts.setLanguage(locale)
-                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                    throw IOException("系统 TTS 不支持语言 '${config.voice}'。请在系统设置中安装对应语言包。")
-                }
-                configuredVoice = config.voice
-            }
-
-            val tempFile = File.createTempFile("tts_", ".wav", context.cacheDir)
-            try {
-                suspendCoroutine { cont ->
-                    tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                        override fun onStart(id: String) {}
-                        override fun onDone(id: String) = cont.resume(Unit)
-
-                        @Suppress("DEPRECATION")
-                        override fun onError(id: String) =
-                            cont.resumeWithException(IOException("Android TTS synthesis failed"))
-                    })
-                    if (tts.synthesizeToFile(text, Bundle(), tempFile, tempFile.name) == TextToSpeech.ERROR) {
-                        cont.resumeWithException(IOException("Android TTS: failed to queue synthesis"))
+            synthesizeMutex.withLock {
+                if (config.voice != configuredVoice) {
+                    val locale = Locale.forLanguageTag(config.voice)
+                    val result = tts.setLanguage(locale)
+                    if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                        throw IOException("系统 TTS 不支持语言 '${config.voice}'。请在系统设置中安装对应语言包。")
                     }
+                    configuredVoice = config.voice
                 }
-                tempFile.readBytes()
-            } finally {
-                tempFile.delete()
+
+                val tempFile = File.createTempFile("tts_", ".wav", context.cacheDir)
+                try {
+                    suspendCancellableCoroutine { cont ->
+                        tts.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                            override fun onStart(id: String) {}
+                            override fun onDone(id: String) {
+                                if (cont.isActive) cont.resume(Unit)
+                            }
+                            @Suppress("DEPRECATION")
+                            override fun onError(id: String) {
+                                if (cont.isActive) cont.resumeWithException(
+                                    IOException("Android TTS synthesis failed")
+                                )
+                            }
+                        })
+                        if (tts.synthesizeToFile(text, Bundle(), tempFile, tempFile.name) == TextToSpeech.ERROR) {
+                            if (cont.isActive) cont.resumeWithException(
+                                IOException("Android TTS: failed to queue synthesis")
+                            )
+                        }
+                    }
+                    tempFile.readBytes()
+                } finally {
+                    tempFile.delete()
+                }
             }
         }
 }

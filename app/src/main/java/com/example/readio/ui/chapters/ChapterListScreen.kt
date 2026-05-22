@@ -173,7 +173,7 @@ private fun ChapterItem(
                 IconButton(onClick = { showClearDialog = true }, modifier = Modifier.size(40.dp)) {
                     Icon(
                         Icons.Default.Delete,
-                        contentDescription = "Delete cached audio",
+                        contentDescription = "删除音频缓存",
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }

@@ -16,6 +16,7 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.readio.domain.model.ReadingTheme
+import com.example.readio.domain.model.TranslationLanguage
 import com.example.readio.domain.model.TtsProvider
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -30,6 +31,7 @@ fun SettingsScreen(
     val prefs by viewModel.readingPrefs.collectAsStateWithLifecycle()
     val clearingAudio by viewModel.clearingAudio.collectAsStateWithLifecycle()
     val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
 
     // TTS state
     var selectedProvider by remember(ttsConfig.provider) { mutableStateOf(ttsConfig.provider) }
@@ -43,16 +45,18 @@ fun SettingsScreen(
     var fontSize by remember(prefs.fontSize) { mutableIntStateOf(prefs.fontSize) }
     var lineHeight by remember(prefs.lineHeightMultiplier) { mutableFloatStateOf(prefs.lineHeightMultiplier) }
     var readingTheme by remember(prefs.readingTheme) { mutableStateOf(prefs.readingTheme) }
+    var translationLanguage by remember(prefs.translationLanguage) { mutableStateOf(prefs.translationLanguage) }
 
     var providerMenuExpanded by remember { mutableStateOf(false) }
+    var translationLangMenuExpanded by remember { mutableStateOf(false) }
     var regionMenuExpanded by remember { mutableStateOf(false) }
     var voiceMenuExpanded by remember { mutableStateOf(false) }
     var keyVisible by remember { mutableStateOf(false) }
     var showClearAllDialog by remember { mutableStateOf(false) }
 
-    val voices = TtsVoiceCatalog.byProvider[selectedProvider] ?: emptyList()
-    val voiceLabel = voices.find { it.id == selectedVoice }?.label ?: selectedVoice
-    val regionLabel = azureRegions.find { it.id == region }?.label ?: region
+    val voices = remember(selectedProvider) { TtsVoiceCatalog.byProvider[selectedProvider] ?: emptyList() }
+    val voiceLabel = remember(selectedVoice, voices) { voices.find { it.id == selectedVoice }?.label ?: selectedVoice }
+    val regionLabel = remember(region) { azureRegions.find { it.id == region }?.label ?: region }
 
     if (showClearAllDialog) {
         AlertDialog(
@@ -71,6 +75,7 @@ fun SettingsScreen(
     }
 
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text("设置") },
@@ -223,6 +228,34 @@ fun SettingsScreen(
                 }
             }
 
+            // Translation language
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("翻译目标语言", style = MaterialTheme.typography.labelLarge)
+                ExposedDropdownMenuBox(
+                    expanded = translationLangMenuExpanded,
+                    onExpandedChange = { translationLangMenuExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = translationLanguage.label,
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = translationLangMenuExpanded) }
+                    )
+                    ExposedDropdownMenu(
+                        expanded = translationLangMenuExpanded,
+                        onDismissRequest = { translationLangMenuExpanded = false }
+                    ) {
+                        TranslationLanguage.entries.forEach { lang ->
+                            DropdownMenuItem(
+                                text = { Text(lang.label) },
+                                onClick = { translationLanguage = lang; translationLangMenuExpanded = false }
+                            )
+                        }
+                    }
+                }
+            }
+
             HorizontalDivider()
 
             // ════════ 阅读显示 ════════════════════════════════════════════════
@@ -291,11 +324,15 @@ fun SettingsScreen(
             Button(
                 onClick = {
                     scope.launch {
-                        viewModel.save(
-                            selectedProvider, apiKey, region, selectedVoice, speechRate,
-                            chunkSize, fontSize, lineHeight, readingTheme
-                        )
-                        onBack()
+                        try {
+                            viewModel.save(
+                                selectedProvider, apiKey, region, selectedVoice, speechRate,
+                                chunkSize, fontSize, lineHeight, readingTheme, translationLanguage
+                            )
+                            onBack()
+                        } catch (e: Exception) {
+                            snackbarHostState.showSnackbar("保存失败：${e.message}")
+                        }
                     }
                 },
                 modifier = Modifier.fillMaxWidth()

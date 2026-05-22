@@ -95,6 +95,9 @@ dependencies {
     // Epub parsing
     implementation(libs.jsoup)
 
+    // ML Kit Translation (offline, ~15 MB per language pair, downloaded on demand)
+    implementation("com.google.mlkit:translate:17.0.3")
+
     // Test
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

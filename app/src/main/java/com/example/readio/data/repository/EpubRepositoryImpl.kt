@@ -93,7 +93,8 @@ class EpubRepositoryImpl @Inject constructor(
                 ?: error("Book $bookId not found")
 
             val rawTexts = epubParser.parseChapterTexts(epubFileFor(bookId), chapterEntity.href)
-            val chunkTexts = TextChunker.chunk(rawTexts, chunkSize)
+            val bookLanguage = Language.fromTag(bookEntity.language)
+            val chunkTexts = TextChunker.chunk(rawTexts, chunkSize, bookLanguage)
 
             val chapter = Chapter(
                 id = chapterId,

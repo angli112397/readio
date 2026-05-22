@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.example.readio.domain.model.ReadingPreferences
 import com.example.readio.domain.model.ReadingTheme
+import com.example.readio.domain.model.TranslationLanguage
 import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.SettingsRepository
@@ -50,10 +51,11 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun saveReadingPreferences(prefs: ReadingPreferences) {
         dataStore.edit { data ->
-            data[Keys.CHUNK_SIZE]          = prefs.chunkSize
-            data[Keys.FONT_SIZE]           = prefs.fontSize
-            data[Keys.LINE_HEIGHT]         = prefs.lineHeightMultiplier
-            data[Keys.READING_THEME]       = prefs.readingTheme.name
+            data[Keys.CHUNK_SIZE]            = prefs.chunkSize
+            data[Keys.FONT_SIZE]             = prefs.fontSize
+            data[Keys.LINE_HEIGHT]           = prefs.lineHeightMultiplier
+            data[Keys.READING_THEME]         = prefs.readingTheme.name
+            data[Keys.TRANSLATION_LANGUAGE]  = prefs.translationLanguage.name
         }
     }
 
@@ -69,12 +71,15 @@ class SettingsRepositoryImpl @Inject constructor(
     )
 
     private fun Preferences.toReadingPreferences() = ReadingPreferences(
-        chunkSize          = this[Keys.CHUNK_SIZE] ?: 150,
-        fontSize           = this[Keys.FONT_SIZE] ?: 16,
+        chunkSize            = this[Keys.CHUNK_SIZE] ?: 150,
+        fontSize             = this[Keys.FONT_SIZE] ?: 16,
         lineHeightMultiplier = this[Keys.LINE_HEIGHT] ?: 1.5f,
-        readingTheme       = this[Keys.READING_THEME]
-                             ?.let { runCatching { ReadingTheme.valueOf(it) }.getOrNull() }
-                             ?: ReadingTheme.DEFAULT
+        readingTheme         = this[Keys.READING_THEME]
+                               ?.let { runCatching { ReadingTheme.valueOf(it) }.getOrNull() }
+                               ?: ReadingTheme.DEFAULT,
+        translationLanguage  = this[Keys.TRANSLATION_LANGUAGE]
+                               ?.let { runCatching { TranslationLanguage.valueOf(it) }.getOrNull() }
+                               ?: TranslationLanguage.ZH_CN
     )
 
     private object Keys {
@@ -86,6 +91,7 @@ class SettingsRepositoryImpl @Inject constructor(
         val CHUNK_SIZE     = intPreferencesKey("tts_chunk_size")
         val FONT_SIZE      = intPreferencesKey("reading_font_size")
         val LINE_HEIGHT    = floatPreferencesKey("reading_line_height")
-        val READING_THEME  = stringPreferencesKey("reading_theme")
+        val READING_THEME          = stringPreferencesKey("reading_theme")
+        val TRANSLATION_LANGUAGE   = stringPreferencesKey("translation_language")
     }
 }

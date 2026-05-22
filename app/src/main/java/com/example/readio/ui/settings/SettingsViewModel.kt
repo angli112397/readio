@@ -4,6 +4,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.readio.domain.model.ReadingPreferences
 import com.example.readio.domain.model.ReadingTheme
+import com.example.readio.domain.model.TranslationLanguage
 import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.AudioRepository
@@ -33,10 +34,13 @@ class SettingsViewModel @Inject constructor(
 
     suspend fun save(
         provider: TtsProvider, apiKey: String, region: String, voice: String, speechRate: Float,
-        chunkSize: Int, fontSize: Int, lineHeightMultiplier: Float, readingTheme: ReadingTheme
+        chunkSize: Int, fontSize: Int, lineHeightMultiplier: Float,
+        readingTheme: ReadingTheme, translationLanguage: TranslationLanguage
     ) {
         settingsRepository.saveTtsConfig(TtsConfig(provider, apiKey, region, voice, speechRate))
-        settingsRepository.saveReadingPreferences(ReadingPreferences(chunkSize, fontSize, lineHeightMultiplier, readingTheme))
+        settingsRepository.saveReadingPreferences(
+            ReadingPreferences(chunkSize, fontSize, lineHeightMultiplier, readingTheme, translationLanguage)
+        )
     }
 
     fun clearAllDownloadedAudio() {
