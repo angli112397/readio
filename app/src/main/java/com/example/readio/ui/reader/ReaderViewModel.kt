@@ -101,15 +101,10 @@ class ReaderViewModel @Inject constructor(
 
     private lateinit var _player: MediaController
 
-    // Set by the player listener when audio drives a chunk transition; consumed in onChunkTap
-    // to suppress the seek-back that would otherwise interrupt ongoing playback.
-    private var lastAudioDrivenIndex = -1
-
     private val playerListener = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) return
             val newIndex = _player.currentMediaItemIndex
-            lastAudioDrivenIndex = newIndex
             updateChunkIndex(newIndex)
             viewModelScope.launch {
                 val chapter = _uiState.value.chapter ?: return@launch
@@ -164,8 +159,10 @@ class ReaderViewModel @Inject constructor(
         val state = _uiState.value
         val chapter = state.chapter ?: return
 
-        val isAudioDrivenCallback = index == lastAudioDrivenIndex
-        lastAudioDrivenIndex = -1
+        // When audio drives the wheel (player advanced → animateScrollToItem → snap correction),
+        // multiple onCenterChanged callbacks can fire for the same index. Suppress all seeks
+        // as long as audio is playing at this index — avoids restarting the chunk mid-playback.
+        val isAudioDrivenCallback = state.isPlaying && index == state.currentChunkIndex
 
         updateChunkIndex(index)
         viewModelScope.launch { progressRepository.savePosition(ReadingPosition(bookId, chapter.id, index)) }

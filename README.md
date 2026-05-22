@@ -1,95 +1,103 @@
 # Readio
 
-An Android EPUB audiobook reader that converts any EPUB to a karaoke-style listening experience — text and audio stay in sync sentence by sentence.
+An Android EPUB audiobook reader with a drum-roller chunk wheel: text and audio stay in sync, chunk by chunk. Tap any chunk to get an instant offline translation.
 
 ## What it does
 
-Import an EPUB, press play. Each sentence is read aloud via Azure Neural TTS while the sentence wheel scrolls to keep the current sentence centered on screen. Sentence-level sync is handled by ExoPlayer: each sentence is its own audio file and its own playlist item, so the display index always matches the player's current item index.
+Import an EPUB, press play. The content is split into semantically coherent chunks — respecting sentence boundaries, bracket pairs, and language-specific rules — and read aloud via Azure Neural TTS (or the on-device system TTS for offline use). The chunk wheel scrolls to keep the current chunk centred while audio advances automatically. Tap any centred chunk to translate it instantly via ML Kit offline translation.
 
 ## Features
 
-- **EPUB import** — parses OPF spine + NCX for chapter structure, splits content into sentences via `BreakIterator`
-- **Paragraph wheel** — drum-roller UI with scale/alpha perspective effect and haptic feedback on each scroll tick
-- **Azure Neural TTS** — per-sentence synthesis, cached locally; playback speed controlled by ExoPlayer (not baked into audio)
-- **Offline caching** — audio files survive app updates; stored in private internal storage (`filesDir/audio/`)
-- **Chapter download manager** — download individual chapters or all at once; downloads continue in the background when navigating away
+- **EPUB import** — parses OPF spine + NCX for chapter structure; normalises Unicode whitespace and invisible characters before chunking
+- **Language-aware chunking** — `chunkSize=150` means ~150 CJK characters or ~37 English words, keeping visual density consistent across languages. Sentence splitting respects paired brackets (`「」`, `""`, `（）`, …) so quoted dialogue is never broken mid-quote
+- **Chunk wheel** — drum-roller UI with scale/alpha perspective, haptic feedback on each tick, and per-chunk text alignment (Justify for CJK, Start for Latin)
+- **Offline translation** — tap the centred chunk; ML Kit translates it on-device. Toggle tap to dismiss. Supports 简体中文, English, 日本語, 한국어 as target languages
+- **Dual TTS providers** — Azure Neural TTS for cloud quality; System TTS for zero-config offline use. Both use the same caching pipeline
+- **Offline caching** — audio cached to `filesDir/audio/` keyed by `provider|voice|chunkSize`; cache invalidated automatically when TTS config or chunk size changes
+- **Streaming playback** — audio starts after the first buffer of chunks is generated; the rest are added to the ExoPlayer playlist as synthesis completes
+- **Chapter download manager** — download chapters individually or in bulk; downloads are app-scoped and survive navigation and screen rotation
 - **Background playback** — `MediaSessionService` keeps audio alive when the app is minimised; lock screen and notification controls work out of the box
-- **Multi-provider architecture** — adding a new TTS provider requires one enum entry, one class implementing `TtsEngine`, and one Hilt binding
+- **Reading preferences** — font size, line height, chunk size, background theme (Default / Warm / Sepia / Night), translation target language; all persisted via DataStore
 
 ## Setup
 
-1. Create an [Azure Speech resource](https://portal.azure.com) (F0 free tier: 500k chars/month)
-2. Add to `local.properties` (never committed):
+1. Create an [Azure Speech resource](https://portal.azure.com) (F0 free tier: 500 k chars/month)
+2. Build and run. In **Settings**, select *Microsoft Azure*, paste your API key, choose a region and voice, then press Save.
 
-```
-AZURE_SPEECH_KEY=your_key_here
-AZURE_SPEECH_REGION=eastasia
-```
-
-3. Build and run. Enter the key and region in **Settings** before pressing play.
-
-> The key in `local.properties` is used only during development. In the app, credentials are stored in DataStore and entered by the user via Settings.
+> For offline testing without an Azure account, select **系统 TTS（本地）** in Settings — no key required.
 
 ## Tech stack
 
 | Layer | Libraries |
-|-------|-----------|
-| UI | Jetpack Compose, Material3 |
+|---|---|
+| UI | Jetpack Compose, Material 3 |
 | Navigation | Navigation Compose |
 | DI | Hilt |
 | Database | Room |
 | Preferences | DataStore |
 | Media | ExoPlayer (Media3), MediaSessionService |
 | EPUB parsing | Jsoup |
+| Translation | ML Kit Translate (offline) |
 | Language | Kotlin, Coroutines, Flow |
 
 ## Architecture
 
-Clean Architecture with three layers. Dependency direction: UI → Domain ← Data.
+Clean Architecture. Dependency direction: UI → Domain ← Data.
 
 ```
 ui/
-  library/       BookList screen + ViewModel
-  reader/        ParagraphWheel + ReaderViewModel + PlaybackService
-  chapters/      ChapterList screen + AudioDownloadManager (singleton, app-scoped)
-  settings/      Settings screen + ViewModel
+  library/       Book list screen + ViewModel
+  reader/        ChunkWheel, ReaderScreen, ReaderViewModel, PlaybackService
+  chapters/      Chapter list screen + ViewModel
+  settings/      Settings screen + ViewModel, TtsVoiceCatalog
 
 domain/
-  model/         EpubBook, Chapter, Paragraph, TtsConfig, ChapterAudio, …
-  repository/    Interfaces (EpubRepository, AudioRepository, SettingsRepository, …)
+  model/         EpubBook, Chapter, Chunk, Language, TtsConfig, ChapterAudio,
+                 ReadingPreferences, ReadingTheme, TranslationLanguage, …
+  repository/    EpubRepository, AudioRepository, SettingsRepository,
+                 VocabularyRepository, ReadingProgressRepository
+  service/       TextChunker, PunctuationTable
+  manager/       AudioDownloadManager (app-scoped, SupervisorJob)
   usecase/       GetReadingPositionUseCase, PrepareChapterAudioUseCase,
-                 DownloadChapterAudioUseCase, DeleteBookUseCase
+                 DownloadChapterAudioUseCase
 
 data/
-  epub/          EpubParser (ZipFile + Jsoup, BreakIterator sentence splitting)
-  audio/         TtsEngine interface + AzureTtsEngine, AudioRepositoryImpl
+  epub/          EpubParser (ZipFile + Jsoup)
+  audio/         TtsEngine interface, AzureTtsEngine, AndroidTtsEngine,
+                 AudioRepositoryImpl
   db/            Room database, DAOs, entities
-  repository/    EpubRepositoryImpl, SettingsRepositoryImpl, …
+  repository/    EpubRepositoryImpl, SettingsRepositoryImpl,
+                 VocabularyRepositoryImpl, ReadingProgressRepositoryImpl
 ```
 
 ### Key design decisions
 
-**Per-sentence audio files** — each sentence is synthesised as an individual MP3. The sentence index equals the ExoPlayer playlist index, so sync is trivially correct: `onMediaItemTransition` updates the display, nothing else needed.
+**Per-chunk audio files** — each chunk is synthesised as an individual MP3. The chunk index equals the ExoPlayer playlist index, so sync is trivially correct: `onMediaItemTransition` updates the display, nothing else needed.
 
-**Streaming playback** — audio starts after 5 sentences are generated; the rest are added to the playlist as they complete. Cache hits skip generation entirely and load all files at once.
+**Streaming playback** — audio starts after the first buffer of chunks is ready (startIndex + 5); remaining chunks are appended to the playlist as synthesis completes. Cache hits skip synthesis and serve all files immediately.
 
-**Cache key** — `PROVIDER|voice` (rate excluded). Playback speed is applied locally via `player.setPlaybackSpeed()`, so changing speed never invalidates cached audio.
+**Cache key** — `provider|voice|chunkSize`. Rate is excluded (applied locally via `setPlaybackSpeed`). Changing chunk size or voice invalidates the cache; AudioDownloadManager detects this and refreshes chapter statuses automatically.
 
-**Background downloads** — `AudioDownloadManager` uses a `CoroutineScope(SupervisorJob())` tied to the process, not to any ViewModel. Downloads survive navigation and screen rotation.
+**Language-aware chunking** — `TextChunker` uses `LATIN_WORD_WEIGHT = 4`: one English word counts as 4 units, one CJK character counts as 1 unit. A single `chunkSize` slider in Settings controls both languages with consistent visual density.
 
-**TTS provider extensibility** — to add a provider:
-1. Add an entry to `TtsProvider` enum
+**Bracket-respecting sentence splitting** — `TextChunker.mergeBracketSpans` re-joins sentence fragments that were split inside an unclosed bracket pair, keeping dialogue and parenthetical content intact. English `.` is recognised as a sentence boundary only when followed by whitespace + an uppercase letter or opening quote.
+
+**Translation** — `VocabularyRepositoryImpl` wraps ML Kit's `Translator`. Language is auto-detected per chunk from character ranges. Model download (≈15 MB per language pair) is triggered on first use with a 30 s timeout. A `Mutex` serialises `setLanguage` + synthesis calls to prevent concurrent-access races.
+
+**Background downloads** — `AudioDownloadManager` lives in a `CoroutineScope(SupervisorJob() + Dispatchers.IO)` bound to the process. Downloads survive ViewModel destruction and navigation.
+
+**TTS extensibility** — to add a provider:
+1. Add an entry to `TtsProvider`
 2. Implement `TtsEngine`
 3. Add `@Binds @IntoSet` in `TtsEngineModule`
 4. Add voices to `TtsVoiceCatalog`
 
-The repository, ViewModels, and Settings UI require no changes.
-
 ## Storage
 
-| What | Where | Survives update? | Survives clear data? |
-|------|-------|-----------------|---------------------|
+| What | Where | Survives update | Survives clear data |
+|---|---|---|---|
 | EPUB files | `filesDir/epubs/` | ✓ | ✗ |
 | Audio cache | `filesDir/audio/` | ✓ | ✗ |
 | Reading positions | Room database | ✓ | ✗ |
 | TTS credentials | DataStore | ✓ | ✗ |
+| Reading preferences | DataStore | ✓ | ✗ |
