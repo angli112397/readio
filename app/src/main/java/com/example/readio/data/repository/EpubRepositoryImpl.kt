@@ -9,9 +9,11 @@ import com.example.readio.data.db.entity.ChapterIndexEntity
 import com.example.readio.data.db.entity.toDomain
 import com.example.readio.data.epub.EpubParser
 import com.example.readio.domain.model.Chapter
+import com.example.readio.domain.model.Chunk
 import com.example.readio.domain.model.EpubBook
-import com.example.readio.domain.model.Paragraph
+import com.example.readio.domain.model.Language
 import com.example.readio.domain.repository.EpubRepository
+import com.example.readio.domain.service.TextChunker
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
@@ -30,7 +32,7 @@ class EpubRepositoryImpl @Inject constructor(
     @ApplicationContext private val context: Context
 ) : EpubRepository {
 
-    // LRU cache, max 3 chapters
+    // LRU cache keyed by "$chapterId|$chunkSize" — changing chunk size causes a cache miss
     private val chapterCache = object : LinkedHashMap<String, Chapter>(4, 0.75f, true) {
         override fun removeEldestEntry(eldest: Map.Entry<String, Chapter>) = size > 3
     }
@@ -74,35 +76,42 @@ class EpubRepositoryImpl @Inject constructor(
 
     override suspend fun deleteBook(bookId: String) {
         epubFileFor(bookId).delete()
-        bookDao.deleteById(bookId) // CASCADE deletes chapter_indices
+        bookDao.deleteById(bookId)
         synchronized(chapterCache) {
             chapterCache.keys.removeIf { it.startsWith("${bookId}_") }
         }
     }
 
-    override suspend fun loadChapter(bookId: String, chapterId: String): Chapter =
+    override suspend fun loadChapter(bookId: String, chapterId: String, chunkSize: Int): Chapter =
         withContext(Dispatchers.IO) {
-            synchronized(chapterCache) { chapterCache[chapterId] }?.let { return@withContext it }
+            val cacheKey = "$chapterId|$chunkSize"
+            synchronized(chapterCache) { chapterCache[cacheKey] }?.let { return@withContext it }
 
             val chapterEntity = chapterIndexDao.getById(chapterId)
                 ?: error("Chapter $chapterId not found")
-            val paragraphs = epubParser.parseChapterParagraphs(epubFileFor(bookId), chapterEntity.href)
+            val bookEntity = bookDao.getById(bookId)
+                ?: error("Book $bookId not found")
+
+            val rawTexts = epubParser.parseChapterTexts(epubFileFor(bookId), chapterEntity.href)
+            val chunkTexts = TextChunker.chunk(rawTexts, chunkSize)
 
             val chapter = Chapter(
                 id = chapterId,
                 bookId = bookId,
                 title = chapterEntity.title,
                 indexInBook = chapterEntity.indexInBook,
-                paragraphs = paragraphs.mapIndexed { index, text ->
-                    Paragraph(
-                        id = Paragraph.buildId(chapterId, index),
+                language = Language.fromTag(bookEntity.language),
+                chunkSize = chunkSize,
+                chunks = chunkTexts.mapIndexed { index, text ->
+                    Chunk(
+                        id = Chunk.buildId(chapterId, index),
                         chapterId = chapterId,
                         indexInChapter = index,
                         text = text
                     )
                 }
             )
-            synchronized(chapterCache) { chapterCache[chapterId] = chapter }
+            synchronized(chapterCache) { chapterCache[cacheKey] = chapter }
             chapter
         }
 

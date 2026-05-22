@@ -29,8 +29,7 @@ class AndroidTtsEngine @Inject constructor(
     private val initDeferred = CompletableDeferred<Unit>()
 
     // TextToSpeech constructor must be called on a thread with a Looper.
-    // Hilt creates @Singleton instances from the main thread on first injection,
-    // so this is safe without additional dispatch.
+    // Hilt creates @Singleton instances from the main thread on first injection.
     private val tts = TextToSpeech(context) { status ->
         if (status == TextToSpeech.SUCCESS) initDeferred.complete(Unit)
         else initDeferred.completeExceptionally(
@@ -38,18 +37,20 @@ class AndroidTtsEngine @Inject constructor(
         )
     }
 
+    // Cache the last configured voice to avoid redundant setLanguage() calls per sentence.
+    private var configuredVoice = ""
+
     override suspend fun synthesize(text: String, config: TtsConfig): ByteArray =
         withContext(Dispatchers.IO) {
             initDeferred.await()
 
-            val locale = Locale.forLanguageTag(config.voice)
-            val langResult = tts.setLanguage(locale)
-            if (langResult == TextToSpeech.LANG_MISSING_DATA ||
-                langResult == TextToSpeech.LANG_NOT_SUPPORTED
-            ) {
-                throw IOException(
-                    "系统 TTS 不支持语言 '${config.voice}'。请在系统设置中安装对应语言包。"
-                )
+            if (config.voice != configuredVoice) {
+                val locale = Locale.forLanguageTag(config.voice)
+                val result = tts.setLanguage(locale)
+                if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
+                    throw IOException("系统 TTS 不支持语言 '${config.voice}'。请在系统设置中安装对应语言包。")
+                }
+                configuredVoice = config.voice
             }
 
             val tempFile = File.createTempFile("tts_", ".wav", context.cacheDir)
@@ -63,10 +64,7 @@ class AndroidTtsEngine @Inject constructor(
                         override fun onError(id: String) =
                             cont.resumeWithException(IOException("Android TTS synthesis failed"))
                     })
-                    // synthesizeToFile returning ERROR means queue rejected it (listener won't fire)
-                    if (tts.synthesizeToFile(text, Bundle(), tempFile, tempFile.name)
-                        == TextToSpeech.ERROR
-                    ) {
+                    if (tts.synthesizeToFile(text, Bundle(), tempFile, tempFile.name) == TextToSpeech.ERROR) {
                         cont.resumeWithException(IOException("Android TTS: failed to queue synthesis"))
                     }
                 }

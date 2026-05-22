@@ -23,6 +23,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.readio.domain.model.ChapterAudioStatus
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -41,7 +42,7 @@ fun ChapterListScreen(
                         Text(state.bookTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (state.isBulkDownloading) {
                             Text(
-                                "Downloading ${state.bulkDone}/${state.bulkTotal}…",
+                                "正在下载 ${state.bulkDone}/${state.bulkTotal}…",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -50,24 +51,22 @@ fun ChapterListScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
-                    if (!state.isLocalTts) {
-                        if (state.isBulkDownloading) {
-                            IconButton(onClick = viewModel::cancelBulkDownload) {
-                                Icon(Icons.Default.Clear, contentDescription = "Cancel download")
+                    if (state.isBulkDownloading) {
+                        IconButton(onClick = viewModel::cancelBulkDownload) {
+                            Icon(Icons.Default.Clear, contentDescription = "取消下载")
+                        }
+                    } else {
+                        IconButton(
+                            onClick = viewModel::downloadAll,
+                            enabled = state.chapters.any {
+                                it.audioStatus !is ChapterAudioStatus.Downloaded
                             }
-                        } else {
-                            IconButton(
-                                onClick = viewModel::downloadAll,
-                                enabled = state.chapters.any {
-                                    it.audioStatus !is ChapterAudioStatus.Downloaded
-                                }
-                            ) {
-                                Icon(Icons.Default.Download, contentDescription = "Download all")
-                            }
+                        ) {
+                            Icon(Icons.Default.Download, contentDescription = "全部下载")
                         }
                     }
                 }
@@ -90,7 +89,6 @@ fun ChapterListScreen(
                     itemsIndexed(state.chapters, key = { _, item -> item.chapterIndex.id }) { _, item ->
                         ChapterItem(
                             item = item,
-                            isLocalTts = state.isLocalTts,
                             onClick = { onOpenChapter(item.chapterIndex.id) },
                             onDownload = { viewModel.downloadChapter(item) },
                             onClear = { viewModel.clearChapter(item) }
@@ -106,7 +104,6 @@ fun ChapterListScreen(
 @Composable
 private fun ChapterItem(
     item: ChapterUiItem,
-    isLocalTts: Boolean,
     onClick: () -> Unit,
     onDownload: () -> Unit,
     onClear: () -> Unit
@@ -116,15 +113,15 @@ private fun ChapterItem(
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            title = { Text("Delete audio?") },
-            text = { Text("\"${item.chapterIndex.title}\" will need to be downloaded again.") },
+            title = { Text("删除音频？") },
+            text = { Text("「${item.chapterIndex.title}」的音频将被删除，下次播放需重新下载。") },
             confirmButton = {
                 TextButton(onClick = { showClearDialog = false; onClear() }) {
-                    Text("Delete", color = MaterialTheme.colorScheme.error)
+                    Text("删除", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showClearDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showClearDialog = false }) { Text("取消") }
             }
         )
     }
@@ -153,43 +150,41 @@ private fun ChapterItem(
             modifier = Modifier.weight(1f)
         )
 
-        if (!isLocalTts) {
-            when (val status = item.audioStatus) {
-                is ChapterAudioStatus.NotDownloaded -> {
-                    IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            Icons.Default.Download,
-                            contentDescription = "Download audio",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+        when (val status = item.audioStatus) {
+            is ChapterAudioStatus.NotDownloaded -> {
+                IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.Download,
+                        contentDescription = "下载音频",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-                is ChapterAudioStatus.Downloading -> {
-                    Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(
-                            progress = { status.progress },
-                            modifier = Modifier.size(24.dp),
-                            strokeWidth = 2.5.dp
-                        )
-                    }
+            }
+            is ChapterAudioStatus.Downloading -> {
+                Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
+                    CircularProgressIndicator(
+                        progress = { status.progress },
+                        modifier = Modifier.size(24.dp),
+                        strokeWidth = 2.5.dp
+                    )
                 }
-                is ChapterAudioStatus.Downloaded -> {
-                    IconButton(onClick = { showClearDialog = true }, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            Icons.Default.Delete,
-                            contentDescription = "Delete cached audio",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
+            }
+            is ChapterAudioStatus.Downloaded -> {
+                IconButton(onClick = { showClearDialog = true }, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.Delete,
+                        contentDescription = "Delete cached audio",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
-                is ChapterAudioStatus.Error -> {
-                    IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
-                        Icon(
-                            Icons.Default.Warning,
-                            contentDescription = "Retry download",
-                            tint = MaterialTheme.colorScheme.error
-                        )
-                    }
+            }
+            is ChapterAudioStatus.Error -> {
+                IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
+                    Icon(
+                        Icons.Default.Warning,
+                        contentDescription = "重试下载",
+                        tint = MaterialTheme.colorScheme.error
+                    )
                 }
             }
         }

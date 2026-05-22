@@ -2,6 +2,8 @@ package com.example.readio.ui.settings
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.readio.domain.model.ReadingPreferences
+import com.example.readio.domain.model.ReadingTheme
 import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.AudioRepository
@@ -20,16 +22,21 @@ class SettingsViewModel @Inject constructor(
     private val audioRepository: AudioRepository
 ) : ViewModel() {
 
-    val config = settingsRepository.observeTtsConfig()
+    val ttsConfig = settingsRepository.observeTtsConfig()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TtsConfig())
+
+    val readingPrefs = settingsRepository.observeReadingPreferences()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReadingPreferences())
 
     private val _clearingAudio = MutableStateFlow(false)
     val clearingAudio = _clearingAudio.asStateFlow()
 
-    fun save(provider: TtsProvider, apiKey: String, region: String, voice: String, speechRate: Float) {
-        viewModelScope.launch {
-            settingsRepository.saveTtsConfig(TtsConfig(provider, apiKey, region, voice, speechRate))
-        }
+    suspend fun save(
+        provider: TtsProvider, apiKey: String, region: String, voice: String, speechRate: Float,
+        chunkSize: Int, fontSize: Int, lineHeightMultiplier: Float, readingTheme: ReadingTheme
+    ) {
+        settingsRepository.saveTtsConfig(TtsConfig(provider, apiKey, region, voice, speechRate))
+        settingsRepository.saveReadingPreferences(ReadingPreferences(chunkSize, fontSize, lineHeightMultiplier, readingTheme))
     }
 
     fun clearAllDownloadedAudio() {

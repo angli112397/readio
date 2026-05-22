@@ -14,9 +14,9 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.example.readio.PlaybackService
 import com.example.readio.domain.model.Chapter
-import com.example.readio.domain.model.ChapterAudio
 import com.example.readio.domain.model.EpubBook
 import com.example.readio.domain.model.ReadingPosition
+import com.example.readio.domain.model.ReadingPreferences
 import com.example.readio.domain.repository.ChapterAudioState
 import com.example.readio.domain.repository.EpubRepository
 import com.example.readio.domain.repository.ReadingProgressRepository
@@ -29,10 +29,12 @@ import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -44,7 +46,7 @@ data class ReaderUiState(
     val bookTitle: String = "",
     val chapterTitle: String = "",
     val chapter: Chapter? = null,
-    val currentParagraphIndex: Int = 0,
+    val currentChunkIndex: Int = 0,
     val hasPrevChapter: Boolean = false,
     val hasNextChapter: Boolean = false,
     val isLoading: Boolean = true,
@@ -52,7 +54,6 @@ data class ReaderUiState(
     val isPlaying: Boolean = false,
     val audioGenerating: Boolean = false,
     val audioProgress: Float = 0f,
-    val chapterAudio: ChapterAudio? = null,
     val audioError: String? = null
 )
 
@@ -79,6 +80,9 @@ class ReaderViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(ReaderUiState())
     val uiState = _uiState.asStateFlow()
 
+    val readingPrefs = settingsRepository.observeReadingPreferences()
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ReadingPreferences())
+
     private var currentBook: EpubBook? = null
     private var chapterLoadJob: Job? = null
     private var audioJob: Job? = null
@@ -90,7 +94,7 @@ class ReaderViewModel @Inject constructor(
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             if (reason == Player.MEDIA_ITEM_TRANSITION_REASON_PLAYLIST_CHANGED) return
             val newIndex = _player.currentMediaItemIndex
-            updateParagraphIndex(newIndex)
+            updateChunkIndex(newIndex)
             viewModelScope.launch {
                 val chapter = _uiState.value.chapter ?: return@launch
                 progressRepository.savePosition(ReadingPosition(bookId, chapter.id, newIndex))
@@ -115,6 +119,16 @@ class ReaderViewModel @Inject constructor(
                 .onEach { _player.setPlaybackSpeed(it.speechRate) }
                 .launchIn(viewModelScope)
 
+            settingsRepository.observeReadingPreferences()
+                .onEach { prefs ->
+                    val chapter = _uiState.value.chapter ?: return@onEach
+                    val book = currentBook ?: return@onEach
+                    if (prefs.chunkSize != chapter.chunkSize) {
+                        loadChapterAt(book, ReadingPosition(bookId, chapter.id, 0))
+                    }
+                }
+                .launchIn(viewModelScope)
+
             val book = epubRepository.observeBooks()
                 .mapNotNull { list -> list.find { it.id == bookId } }
                 .first()
@@ -127,16 +141,13 @@ class ReaderViewModel @Inject constructor(
 
     // ---- Public actions ----
 
-    fun onParagraphTap(index: Int) {
-        val chapter = _uiState.value.chapter ?: return
+    fun onChunkTap(index: Int) {
         val state = _uiState.value
+        val chapter = state.chapter ?: return
 
-        // When audio advances and the wheel snaps to the new paragraph, isScrollInProgress
-        // briefly goes false and fires onCenterChanged with the current index. Guard against
-        // that triggering a seek back to the same position.
-        val isAudioDrivenCallback = state.isPlaying && index == state.currentParagraphIndex
+        val isAudioDrivenCallback = state.isPlaying && index == state.currentChunkIndex
 
-        updateParagraphIndex(index)
+        updateChunkIndex(index)
         viewModelScope.launch { progressRepository.savePosition(ReadingPosition(bookId, chapter.id, index)) }
 
         if (isAudioDrivenCallback) return
@@ -156,27 +167,23 @@ class ReaderViewModel @Inject constructor(
 
     // ---- Private ----
 
-    private fun buildMediaItem(file: File): MediaItem {
-        val state = _uiState.value
-        return MediaItem.Builder()
-            .setUri(file.toUri())
-            .setMediaMetadata(
-                MediaMetadata.Builder()
-                    .setTitle(state.chapterTitle)
-                    .setArtist(state.bookTitle)
-                    .build()
-            )
-            .build()
-    }
+    private fun buildMediaItem(file: File, metadata: MediaMetadata): MediaItem =
+        MediaItem.Builder().setUri(file.toUri()).setMediaMetadata(metadata).build()
 
     private fun generateAndPlay() {
-        val chapter = _uiState.value.chapter ?: return
+        val state = _uiState.value
+        val chapter = state.chapter ?: return
+        val metadata = MediaMetadata.Builder()
+            .setTitle(state.chapterTitle)
+            .setArtist(state.bookTitle)
+            .build()
+        val startIndex = state.currentChunkIndex
+
         audioJob?.cancel()
         audioJob = viewModelScope.launch {
             try {
-                val startIndex = _uiState.value.currentParagraphIndex
                 var playbackStarted = false
-                val bufferSize = minOf(5, chapter.paragraphCount)
+                val bufferSize = minOf(5, chapter.chunkCount)
                 val pendingItems = mutableListOf<MediaItem>()
 
                 prepareChapterAudio(chapter).collect { audioState ->
@@ -187,11 +194,10 @@ class ReaderViewModel @Inject constructor(
                                 audioProgress = audioState.done.toFloat() / audioState.total
                             )
                         }
-                        is ChapterAudioState.ParagraphReady -> {
+                        is ChapterAudioState.ChunkReady -> {
                             if (!playbackStarted) {
-                                pendingItems += buildMediaItem(audioState.file)
+                                pendingItems += buildMediaItem(audioState.file, metadata)
                                 if (pendingItems.size >= startIndex + bufferSize) {
-                                    // Batch-set avoids N rapid EVENT_TIMELINE_CHANGED notifications
                                     _player.setMediaItems(pendingItems, startIndex, 0L)
                                     _player.prepare()
                                     _player.play()
@@ -200,20 +206,18 @@ class ReaderViewModel @Inject constructor(
                                     prefetchNextChapters()
                                 }
                             } else {
-                                _player.addMediaItem(buildMediaItem(audioState.file))
+                                _player.addMediaItem(buildMediaItem(audioState.file, metadata))
                             }
                         }
                         is ChapterAudioState.Ready -> {
                             if (!playbackStarted) {
-                                val items = audioState.audio.paragraphFiles.map { buildMediaItem(it) }
+                                val items = audioState.audio.chunkFiles.map { buildMediaItem(it, metadata) }
                                 _player.setMediaItems(items, startIndex, 0L)
                                 _player.prepare()
                                 _player.play()
                                 prefetchNextChapters()
                             }
-                            _uiState.update {
-                                it.copy(audioGenerating = false, chapterAudio = audioState.audio)
-                            }
+                            _uiState.update { it.copy(audioGenerating = false) }
                         }
                         is ChapterAudioState.Error -> _uiState.update {
                             it.copy(audioGenerating = false, audioError = audioState.message)
@@ -262,17 +266,18 @@ class ReaderViewModel @Inject constructor(
         _uiState.update {
             it.copy(
                 isLoading = true, error = null,
-                chapterAudio = null, isPlaying = false, audioGenerating = false
+                isPlaying = false, audioGenerating = false
             )
         }
-        runCatching { epubRepository.loadChapter(position.bookId, position.chapterId) }
+        val chunkSize = settingsRepository.getReadingPreferences().chunkSize
+        runCatching { epubRepository.loadChapter(position.bookId, position.chapterId, chunkSize) }
             .onSuccess { chapter ->
                 _uiState.update {
                     it.copy(
                         bookTitle = book.title,
                         chapterTitle = chapter.title,
                         chapter = chapter,
-                        currentParagraphIndex = position.indexInChapter,
+                        currentChunkIndex = position.indexInChapter,
                         hasPrevChapter = chapter.indexInBook > 0,
                         hasNextChapter = chapter.indexInBook < book.chapterCount - 1,
                         isLoading = false
@@ -285,8 +290,8 @@ class ReaderViewModel @Inject constructor(
             }
     }
 
-    private fun updateParagraphIndex(index: Int) {
-        _uiState.update { it.copy(currentParagraphIndex = index) }
+    private fun updateChunkIndex(index: Int) {
+        _uiState.update { it.copy(currentChunkIndex = index) }
     }
 
     private suspend fun connectToService(): MediaController {

@@ -2,8 +2,8 @@ package com.example.readio.data.db.entity
 
 import androidx.room.Entity
 import androidx.room.PrimaryKey
-import com.example.readio.domain.model.ChapterIndex
 import com.example.readio.domain.model.EpubBook
+import com.example.readio.domain.model.Language
 
 @Entity(tableName = "books")
 data class BookEntity(
@@ -19,7 +19,7 @@ fun BookEntity.toDomain(chapters: List<ChapterIndexEntity>): EpubBook = EpubBook
     id = id,
     title = title,
     author = author,
-    language = language,
+    language = Language.fromTag(language),
     coverImagePath = coverImagePath,
     chapters = chapters.sortedBy { it.indexInBook }.map { it.toDomain() },
     importedAt = importedAt

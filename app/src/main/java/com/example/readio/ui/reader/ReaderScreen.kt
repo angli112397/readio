@@ -14,6 +14,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 
@@ -26,9 +27,9 @@ fun ReaderScreen(
     viewModel: ReaderViewModel = hiltViewModel()
 ) {
     val state by viewModel.uiState.collectAsStateWithLifecycle()
+    val prefs by viewModel.readingPrefs.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Show audio errors (API failures, missing key, etc.) as a dismissible snackbar.
     LaunchedEffect(state.audioError) {
         state.audioError?.let { msg ->
             snackbarHostState.showSnackbar(message = msg, duration = SnackbarDuration.Long)
@@ -54,15 +55,15 @@ fun ReaderScreen(
                 },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
                 actions = {
                     IconButton(onClick = { onChapterList(viewModel.bookId) }) {
-                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "Chapters")
+                        Icon(Icons.AutoMirrored.Filled.List, contentDescription = "章节列表")
                     }
                     IconButton(onClick = onSettingsOpen) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(Icons.Default.Settings, contentDescription = "设置")
                     }
                 }
             )
@@ -88,15 +89,16 @@ fun ReaderScreen(
             }
             state.error != null -> {
                 Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    Text(state.error ?: "Unknown error", color = MaterialTheme.colorScheme.error)
+                    Text(state.error ?: "加载失败", color = MaterialTheme.colorScheme.error)
                 }
             }
             else -> {
-                val paragraphs = state.chapter?.paragraphs ?: emptyList()
-                ParagraphWheel(
-                    paragraphs = paragraphs,
-                    currentIndex = state.currentParagraphIndex,
-                    onCenterChanged = viewModel::onParagraphTap,
+                ChunkWheel(
+                    chunks = state.chapter?.chunks ?: emptyList(),
+                    currentIndex = state.currentChunkIndex,
+                    onCenterChanged = viewModel::onChunkTap,
+                    fontSize = prefs.fontSize.sp,
+                    lineHeightMultiplier = prefs.lineHeightMultiplier,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding)
@@ -105,7 +107,6 @@ fun ReaderScreen(
         }
     }
 }
-
 
 @Composable
 private fun PlayerBar(
@@ -125,12 +126,11 @@ private fun PlayerBar(
             verticalAlignment = Alignment.CenterVertically
         ) {
             IconButton(onClick = onPrev, enabled = hasPrev && !audioGenerating) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "Previous chapter")
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowLeft, contentDescription = "上一章")
             }
 
             Box(contentAlignment = Alignment.Center) {
                 if (audioGenerating) {
-                    // Show circular progress during TTS generation
                     CircularProgressIndicator(
                         progress = { audioProgress },
                         modifier = Modifier.size(40.dp),
@@ -144,14 +144,14 @@ private fun PlayerBar(
                     IconButton(onClick = onPlayPause) {
                         Icon(
                             imageVector = if (isPlaying) Icons.Default.Pause else Icons.Default.PlayArrow,
-                            contentDescription = if (isPlaying) "Pause" else "Play"
+                            contentDescription = if (isPlaying) "暂停" else "播放"
                         )
                     }
                 }
             }
 
             IconButton(onClick = onNext, enabled = hasNext && !audioGenerating) {
-                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "Next chapter")
+                Icon(Icons.AutoMirrored.Filled.KeyboardArrowRight, contentDescription = "下一章")
             }
         }
     }

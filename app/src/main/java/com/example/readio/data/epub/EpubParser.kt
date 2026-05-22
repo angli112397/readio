@@ -1,15 +1,12 @@
 package com.example.readio.data.epub
 
+import com.example.readio.domain.service.PunctuationTable
 import org.jsoup.Jsoup
 import org.jsoup.parser.Parser
 import java.io.File
-import java.text.BreakIterator
-import java.util.Locale
 import java.util.zip.ZipFile
 import javax.inject.Inject
 import javax.inject.Singleton
-
-private const val MIN_SENTENCE_CHARS = 4
 
 @Singleton
 class EpubParser @Inject constructor() {
@@ -36,36 +33,14 @@ class EpubParser @Inject constructor() {
         }
     }
 
-    fun parseChapterParagraphs(epubFile: File, hrefInZip: String): List<String> {
+    fun parseChapterTexts(epubFile: File, hrefInZip: String): List<String> {
         ZipFile(epubFile).use { zip ->
             val entry = zip.getEntry(hrefInZip) ?: return emptyList()
             val html = zip.getInputStream(entry).reader(Charsets.UTF_8).readText()
             val body = Jsoup.parse(html).body()
-
-            // Use <p> blocks as text sources; fall back to full body text
-            val textBlocks = body.select("p")
-                .map { it.text().trim() }
-                .filter { it.isNotBlank() }
-                .ifEmpty { listOf(body.text()) }
-
-            // Split every block into individual sentences
-            return textBlocks.flatMap { splitSentences(it) }
+            val texts = body.select("p").map { PunctuationTable.normalize(it.text()) }.filter { it.isNotBlank() }
+            return texts.ifEmpty { listOf(PunctuationTable.normalize(body.text())).filter { it.isNotBlank() } }
         }
-    }
-
-    private fun splitSentences(text: String): List<String> {
-        val iterator = BreakIterator.getSentenceInstance(Locale.CHINESE)
-        iterator.setText(text)
-        val result = mutableListOf<String>()
-        var start = iterator.first()
-        var end = iterator.next()
-        while (end != BreakIterator.DONE) {
-            val sentence = text.substring(start, end).trim()
-            if (sentence.length >= MIN_SENTENCE_CHARS) result.add(sentence)
-            start = end
-            end = iterator.next()
-        }
-        return result
     }
 
     private fun parseContainerXml(zip: ZipFile): String {

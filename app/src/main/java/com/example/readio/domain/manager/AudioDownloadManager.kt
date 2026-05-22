@@ -1,5 +1,6 @@
-package com.example.readio.ui.chapters
+package com.example.readio.domain.manager
 
+import com.example.readio.domain.model.ChapterAudioStatus
 import com.example.readio.domain.model.ChapterIndex
 import com.example.readio.domain.repository.AudioRepository
 import com.example.readio.domain.repository.SettingsRepository
@@ -10,10 +11,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -39,20 +45,39 @@ class AudioDownloadManager @Inject constructor(
     val state: StateFlow<DownloadManagerState> = _state.asStateFlow()
 
     private var bulkJob: Job? = null
+    private var lastChapters: List<ChapterIndex> = emptyList()
+
+    init {
+        // When TTS config or chunk size changes, cached audio statuses are stale — invalidate.
+        scope.launch {
+            combine(
+                settingsRepository.observeTtsConfig().map { it.cacheKey },
+                settingsRepository.observeReadingPreferences().map { it.chunkSize }
+            ) { ttsKey, chunkSize -> "$ttsKey|$chunkSize" }
+                .distinctUntilChanged()
+                .drop(1)
+                .collect {
+                    _state.update { it.copy(statusMap = emptyMap()) }
+                    checkStatuses(lastChapters)
+                }
+        }
+    }
 
     fun checkStatuses(chapters: List<ChapterIndex>) {
+        if (chapters.isNotEmpty()) lastChapters = chapters
         scope.launch {
             val unknown = chapters.filter { _state.value.statusMap[it.id] == null }
             if (unknown.isEmpty()) return@launch
-            val config = settingsRepository.getTtsConfig()
+            val ttsConfig = settingsRepository.getTtsConfig()
+            val prefs = settingsRepository.getReadingPreferences()
             val statuses = coroutineScope {
                 unknown.map { chapter ->
                     async {
-                        val downloaded = audioRepository.hasChapterAudio(chapter.id, config)
+                        val downloaded = audioRepository.hasChapterAudio(chapter.id, ttsConfig, prefs.chunkSize)
                         chapter.id to if (downloaded) ChapterAudioStatus.Downloaded
                                       else ChapterAudioStatus.NotDownloaded
                     }
-                }.map { it.await() }
+                }.awaitAll()
             }
             _state.update { it.copy(statusMap = it.statusMap + statuses) }
         }

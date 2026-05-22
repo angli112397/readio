@@ -1,6 +1,8 @@
 package com.example.readio.ui.settings
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Visibility
@@ -13,7 +15,9 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.readio.domain.model.ReadingTheme
 import com.example.readio.domain.model.TtsProvider
+import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -22,37 +26,46 @@ fun SettingsScreen(
     onBack: () -> Unit,
     viewModel: SettingsViewModel = hiltViewModel()
 ) {
-    val config by viewModel.config.collectAsStateWithLifecycle()
+    val ttsConfig by viewModel.ttsConfig.collectAsStateWithLifecycle()
+    val prefs by viewModel.readingPrefs.collectAsStateWithLifecycle()
     val clearingAudio by viewModel.clearingAudio.collectAsStateWithLifecycle()
+    val scope = rememberCoroutineScope()
 
-    var selectedProvider by remember { mutableStateOf(config.provider) }
-    var apiKey by remember { mutableStateOf(config.apiKey) }
-    var region by remember { mutableStateOf(config.region) }
-    var selectedVoice by remember { mutableStateOf(config.voice) }
-    var speechRate by remember { mutableFloatStateOf(config.speechRate) }
+    // TTS state
+    var selectedProvider by remember(ttsConfig.provider) { mutableStateOf(ttsConfig.provider) }
+    var apiKey by remember(ttsConfig.apiKey) { mutableStateOf(ttsConfig.apiKey) }
+    var region by remember(ttsConfig.region) { mutableStateOf(ttsConfig.region) }
+    var selectedVoice by remember(ttsConfig.voice) { mutableStateOf(ttsConfig.voice) }
+    var speechRate by remember(ttsConfig.speechRate) { mutableFloatStateOf(ttsConfig.speechRate) }
+
+    // Reading state
+    var chunkSize by remember(prefs.chunkSize) { mutableIntStateOf(prefs.chunkSize) }
+    var fontSize by remember(prefs.fontSize) { mutableIntStateOf(prefs.fontSize) }
+    var lineHeight by remember(prefs.lineHeightMultiplier) { mutableFloatStateOf(prefs.lineHeightMultiplier) }
+    var readingTheme by remember(prefs.readingTheme) { mutableStateOf(prefs.readingTheme) }
 
     var providerMenuExpanded by remember { mutableStateOf(false) }
+    var regionMenuExpanded by remember { mutableStateOf(false) }
     var voiceMenuExpanded by remember { mutableStateOf(false) }
     var keyVisible by remember { mutableStateOf(false) }
     var showClearAllDialog by remember { mutableStateOf(false) }
 
-    // When provider changes, reset voice to that provider's default
     val voices = TtsVoiceCatalog.byProvider[selectedProvider] ?: emptyList()
     val voiceLabel = voices.find { it.id == selectedVoice }?.label ?: selectedVoice
-    val speedLabel = remember(speechRate) { "%.2f×".format(speechRate) }
+    val regionLabel = azureRegions.find { it.id == region }?.label ?: region
 
     if (showClearAllDialog) {
         AlertDialog(
             onDismissRequest = { showClearAllDialog = false },
-            title = { Text("Clear all downloaded audio?") },
-            text = { Text("All offline audio will be deleted. You'll need to download chapters again to listen offline.") },
+            title = { Text("清除所有音频缓存？") },
+            text = { Text("所有离线音频将被删除，下次播放需要重新下载。") },
             confirmButton = {
                 TextButton(onClick = { showClearAllDialog = false; viewModel.clearAllDownloadedAudio() }) {
-                    Text("Clear all", color = MaterialTheme.colorScheme.error)
+                    Text("清除", color = MaterialTheme.colorScheme.error)
                 }
             },
             dismissButton = {
-                TextButton(onClick = { showClearAllDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showClearAllDialog = false }) { Text("取消") }
             }
         )
     }
@@ -60,10 +73,10 @@ fun SettingsScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text("Settings") },
+                title = { Text("设置") },
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 }
             )
@@ -72,12 +85,18 @@ fun SettingsScreen(
         Column(
             modifier = Modifier
                 .padding(padding)
+                .verticalScroll(rememberScrollState())
                 .padding(horizontal = 24.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(24.dp)
         ) {
-            // ── Provider ────────────────────────────────────────────────────
+
+            // ════════ 朗读设置 ════════════════════════════════════════════════
+            Text("朗读", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary)
+
+            // Provider
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("TTS Provider", style = MaterialTheme.typography.labelLarge)
+                Text("TTS 服务", style = MaterialTheme.typography.labelLarge)
                 ExposedDropdownMenuBox(
                     expanded = providerMenuExpanded,
                     onExpandedChange = { providerMenuExpanded = it }
@@ -107,7 +126,7 @@ fun SettingsScreen(
                 }
             }
 
-            // ── API Key (cloud providers only) ───────────────────────────────
+            // API Key
             if (selectedProvider != TtsProvider.LOCAL_ANDROID) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("API Key", style = MaterialTheme.typography.labelLarge)
@@ -115,14 +134,14 @@ fun SettingsScreen(
                         value = apiKey,
                         onValueChange = { apiKey = it },
                         modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Paste your ${selectedProvider.displayName} key") },
+                        placeholder = { Text("粘贴 ${selectedProvider.displayName} 密钥") },
                         visualTransformation = if (keyVisible) VisualTransformation.None
                                               else PasswordVisualTransformation(),
                         trailingIcon = {
                             IconButton(onClick = { keyVisible = !keyVisible }) {
                                 Icon(
                                     if (keyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (keyVisible) "Hide key" else "Show key"
+                                    contentDescription = if (keyVisible) "隐藏" else "显示"
                                 )
                             }
                         },
@@ -131,23 +150,39 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Region (Azure only) ──────────────────────────────────────────
+            // Region (Azure only)
             if (selectedProvider == TtsProvider.AZURE) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Region", style = MaterialTheme.typography.labelLarge)
-                    OutlinedTextField(
-                        value = region,
-                        onValueChange = { region = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("e.g. eastasia, eastus") },
-                        singleLine = true
-                    )
+                    Text("区域", style = MaterialTheme.typography.labelLarge)
+                    ExposedDropdownMenuBox(
+                        expanded = regionMenuExpanded,
+                        onExpandedChange = { regionMenuExpanded = it }
+                    ) {
+                        OutlinedTextField(
+                            value = regionLabel,
+                            onValueChange = {},
+                            readOnly = true,
+                            modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = regionMenuExpanded) }
+                        )
+                        ExposedDropdownMenu(
+                            expanded = regionMenuExpanded,
+                            onDismissRequest = { regionMenuExpanded = false }
+                        ) {
+                            azureRegions.forEach { r ->
+                                DropdownMenuItem(
+                                    text = { Text(r.label) },
+                                    onClick = { region = r.id; regionMenuExpanded = false }
+                                )
+                            }
+                        }
+                    }
                 }
             }
 
-            // ── Voice ────────────────────────────────────────────────────────
+            // Voice
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Voice", style = MaterialTheme.typography.labelLarge)
+                Text("语音", style = MaterialTheme.typography.labelLarge)
                 ExposedDropdownMenuBox(
                     expanded = voiceMenuExpanded,
                     onExpandedChange = { voiceMenuExpanded = it }
@@ -173,9 +208,9 @@ fun SettingsScreen(
                 }
             }
 
-            // ── Speed ────────────────────────────────────────────────────────
+            // Speed
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("Playback Speed — $speedLabel", style = MaterialTheme.typography.labelLarge)
+                Text("播放速度 — ${"%.2f".format(speechRate)}×", style = MaterialTheme.typography.labelLarge)
                 Slider(
                     value = speechRate,
                     onValueChange = { speechRate = (it * 4).roundToInt() / 4f },
@@ -188,34 +223,98 @@ fun SettingsScreen(
                 }
             }
 
+            HorizontalDivider()
+
+            // ════════ 阅读显示 ════════════════════════════════════════════════
+            Text("阅读显示", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary)
+
+            // Chunk size
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("每段字数 — ~$chunkSize 字", style = MaterialTheme.typography.labelLarge)
+                Slider(
+                    value = chunkSize.toFloat(),
+                    onValueChange = { chunkSize = (it / 50).roundToInt() * 50 },
+                    valueRange = 50f..300f,
+                    steps = 4
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("50", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("300", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // Font size
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("字体大小 — ${fontSize}sp", style = MaterialTheme.typography.labelLarge)
+                Slider(
+                    value = fontSize.toFloat(),
+                    onValueChange = { fontSize = it.roundToInt() },
+                    valueRange = 12f..24f,
+                    steps = 11
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("小", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("大", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // Line height
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("行高 — ${"%.1f".format(lineHeight)}×", style = MaterialTheme.typography.labelLarge)
+                Slider(
+                    value = lineHeight,
+                    onValueChange = { lineHeight = (it * 10).roundToInt() / 10f },
+                    valueRange = 1.0f..2.0f,
+                    steps = 9
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("紧凑", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("宽松", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // Reading theme
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("背景主题", style = MaterialTheme.typography.labelLarge)
+                SingleChoiceSegmentedButtonRow(modifier = Modifier.fillMaxWidth()) {
+                    ReadingTheme.entries.forEachIndexed { index, theme ->
+                        SegmentedButton(
+                            selected = readingTheme == theme,
+                            onClick = { readingTheme = theme },
+                            shape = SegmentedButtonDefaults.itemShape(index, ReadingTheme.entries.size)
+                        ) { Text(theme.label) }
+                    }
+                }
+            }
+
             Button(
                 onClick = {
-                    viewModel.save(selectedProvider, apiKey, region, selectedVoice, speechRate)
-                    onBack()
+                    scope.launch {
+                        viewModel.save(
+                            selectedProvider, apiKey, region, selectedVoice, speechRate,
+                            chunkSize, fontSize, lineHeight, readingTheme
+                        )
+                        onBack()
+                    }
                 },
                 modifier = Modifier.fillMaxWidth()
-            ) {
-                Text("Save")
-            }
+            ) { Text("保存") }
 
             HorizontalDivider()
 
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text("Storage", style = MaterialTheme.typography.labelLarge)
-                OutlinedButton(
-                    onClick = { showClearAllDialog = true },
-                    enabled = !clearingAudio,
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(
-                        contentColor = MaterialTheme.colorScheme.error
-                    )
-                ) {
-                    if (clearingAudio) {
-                        CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
-                    } else {
-                        Text("Clear all downloaded audio")
-                    }
-                }
+            // ════════ 存储 ════════════════════════════════════════════════════
+            Text("存储", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary)
+
+            OutlinedButton(
+                onClick = { showClearAllDialog = true },
+                enabled = !clearingAudio,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                if (clearingAudio) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                else Text("清除所有音频缓存")
             }
         }
     }

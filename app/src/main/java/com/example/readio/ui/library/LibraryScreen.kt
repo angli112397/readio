@@ -42,9 +42,9 @@ fun LibraryScreen(
     error?.let {
         AlertDialog(
             onDismissRequest = viewModel::clearError,
-            title = { Text("Error") },
+            title = { Text("导入失败") },
             text = { Text(it) },
-            confirmButton = { TextButton(onClick = viewModel::clearError) { Text("OK") } }
+            confirmButton = { TextButton(onClick = viewModel::clearError) { Text("确认") } }
         )
     }
 
@@ -54,7 +54,7 @@ fun LibraryScreen(
                 title = { Text("Readio") },
                 actions = {
                     IconButton(onClick = onSettingsOpen) {
-                        Icon(Icons.Default.Settings, contentDescription = "Settings")
+                        Icon(Icons.Default.Settings, contentDescription = "设置")
                     }
                 }
             )
@@ -68,7 +68,7 @@ fun LibraryScreen(
                         color = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 } else {
-                    Icon(Icons.Default.Add, contentDescription = "Import book")
+                    Icon(Icons.Default.Add, contentDescription = "导入书籍")
                 }
             }
         }
@@ -107,13 +107,15 @@ private fun BookCard(
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
-            title = { Text("Delete book?") },
-            text = { Text("\"${book.title}\" will be removed from your library.") },
+            title = { Text("删除这本书？") },
+            text = { Text("「${book.title}」将从书库中移除。") },
             confirmButton = {
-                TextButton(onClick = { showDeleteDialog = false; onDelete() }) { Text("Delete") }
+                TextButton(onClick = { showDeleteDialog = false; onDelete() }) {
+                    Text("删除", color = MaterialTheme.colorScheme.error)
+                }
             },
             dismissButton = {
-                TextButton(onClick = { showDeleteDialog = false }) { Text("Cancel") }
+                TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
             }
         )
     }
@@ -127,7 +129,6 @@ private fun BookCard(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Cover placeholder
             Box(
                 modifier = Modifier
                     .size(56.dp)
@@ -160,7 +161,7 @@ private fun BookCard(
                     )
                 }
                 Text(
-                    text = "${book.chapterCount} chapters",
+                    text = "${book.chapterCount} 章",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -169,7 +170,7 @@ private fun BookCard(
             IconButton(onClick = { showDeleteDialog = true }) {
                 Icon(
                     Icons.Default.Delete,
-                    contentDescription = "Delete",
+                    contentDescription = "删除",
                     tint = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
@@ -180,10 +181,13 @@ private fun BookCard(
 @Composable
 private fun EmptyLibrary(modifier: Modifier = Modifier) {
     Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text("No books yet", style = MaterialTheme.typography.titleMedium)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text("还没有书", style = MaterialTheme.typography.titleMedium)
             Text(
-                "Tap + to import an EPUB file",
+                "点击 + 导入 EPUB 文件",
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

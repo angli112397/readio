@@ -16,6 +16,9 @@ interface BookDao {
     @Query("SELECT * FROM books ORDER BY importedAt DESC")
     fun observeAllWithChapters(): Flow<List<BookWithChapters>>
 
+    @Query("SELECT * FROM books WHERE id = :id")
+    suspend fun getById(id: String): BookEntity?
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insert(book: BookEntity)
 

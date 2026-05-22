@@ -4,6 +4,28 @@ import com.example.readio.domain.model.TtsProvider
 
 data class VoiceOption(val id: String, val label: String)
 
+data class RegionOption(val id: String, val label: String)
+
+val azureRegions = listOf(
+    RegionOption("eastasia",        "东亚 East Asia"),
+    RegionOption("southeastasia",   "东南亚 Southeast Asia"),
+    RegionOption("eastus",          "美国东部 East US"),
+    RegionOption("eastus2",         "美国东部 2 East US 2"),
+    RegionOption("westus",          "美国西部 West US"),
+    RegionOption("westus2",         "美国西部 2 West US 2"),
+    RegionOption("centralus",       "美国中部 Central US"),
+    RegionOption("northeurope",     "北欧 North Europe"),
+    RegionOption("westeurope",      "西欧 West Europe"),
+    RegionOption("uksouth",         "英国南部 UK South"),
+    RegionOption("australiaeast",   "澳大利亚东部 Australia East"),
+    RegionOption("japaneast",       "日本东部 Japan East"),
+    RegionOption("japanwest",       "日本西部 Japan West"),
+    RegionOption("koreacentral",    "韩国中部 Korea Central"),
+    RegionOption("canadacentral",   "加拿大中部 Canada Central"),
+    RegionOption("brazilsouth",     "巴西南部 Brazil South"),
+    RegionOption("centralindia",    "印度中部 Central India"),
+)
+
 object TtsVoiceCatalog {
 
     val byProvider: Map<TtsProvider, List<VoiceOption>> = mapOf(
@@ -27,9 +49,7 @@ object TtsVoiceCatalog {
             VoiceOption("zh-TW-HsiaoChenNeural",  "台灣普通話 曉臻 女"),
             VoiceOption("zh-TW-HsiaoYuNeural",    "台灣普通話 曉雨 女"),
             VoiceOption("zh-TW-YunJheNeural",     "台灣普通話 雲哲 男"),
-        )
-
-        ,
+        ),
 
         TtsProvider.LOCAL_ANDROID to listOf(
             VoiceOption("zh-CN", "普通话（大陆）"),

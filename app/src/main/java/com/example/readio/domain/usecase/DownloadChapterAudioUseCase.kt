@@ -22,13 +22,14 @@ class DownloadChapterAudioUseCase @Inject constructor(
     private val settingsRepository: SettingsRepository
 ) {
     operator fun invoke(bookId: String, chapterId: String): Flow<DownloadProgress> = flow {
-        val config = settingsRepository.getTtsConfig()
-        if (audioRepository.hasChapterAudio(chapterId, config)) {
+        val ttsConfig = settingsRepository.getTtsConfig()
+        val prefs = settingsRepository.getReadingPreferences()
+        if (audioRepository.hasChapterAudio(chapterId, ttsConfig, prefs.chunkSize)) {
             emit(DownloadProgress.Complete)
             return@flow
         }
-        val chapter = epubRepository.loadChapter(bookId, chapterId)
-        emitAll(audioRepository.getChapterAudio(chapter, config).toDownloadProgress())
+        val chapter = epubRepository.loadChapter(bookId, chapterId, prefs.chunkSize)
+        emitAll(audioRepository.getChapterAudio(chapter, ttsConfig).toDownloadProgress())
     }
 
     private fun Flow<ChapterAudioState>.toDownloadProgress(): Flow<DownloadProgress> =

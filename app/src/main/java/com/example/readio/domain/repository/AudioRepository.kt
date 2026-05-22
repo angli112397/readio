@@ -9,14 +9,17 @@ import kotlinx.coroutines.flow.Flow
 sealed class ChapterAudioState {
     data object Idle : ChapterAudioState()
     data class Generating(val done: Int, val total: Int) : ChapterAudioState()
-    data class ParagraphReady(val index: Int, val file: File) : ChapterAudioState()
+    data class ChunkReady(val index: Int, val file: File) : ChapterAudioState()
     data class Ready(val audio: ChapterAudio) : ChapterAudioState()
     data class Error(val message: String) : ChapterAudioState()
 }
 
 interface AudioRepository {
-    fun getChapterAudio(chapter: Chapter, config: TtsConfig): Flow<ChapterAudioState>
-    suspend fun hasChapterAudio(chapterId: String, config: TtsConfig): Boolean
+    fun getChapterAudio(chapter: Chapter, ttsConfig: TtsConfig): Flow<ChapterAudioState>
+
+    /** [chunkSize] must match the chunk size used when the chapter was loaded. */
+    suspend fun hasChapterAudio(chapterId: String, ttsConfig: TtsConfig, chunkSize: Int): Boolean
+
     suspend fun clearChapterAudio(chapterId: String)
     suspend fun clearAllAudio()
 }

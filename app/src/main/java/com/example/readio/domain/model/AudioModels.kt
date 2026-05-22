@@ -2,9 +2,9 @@ package com.example.readio.domain.model
 
 import java.io.File
 
-enum class TtsProvider(val displayName: String, val persistAudio: Boolean = true) {
+enum class TtsProvider(val displayName: String) {
     AZURE("Microsoft Azure"),
-    LOCAL_ANDROID("系统 TTS（本地）", persistAudio = false)
+    LOCAL_ANDROID("系统 TTS（本地）")
 }
 
 data class TtsConfig(
@@ -14,19 +14,16 @@ data class TtsConfig(
     val voice: String = "zh-CN-XiaoxiaoNeural",
     val speechRate: Float = 1.0f
 ) {
-    // Rate is applied locally by ExoPlayer, not baked into audio — cache key excludes it.
+    // Rate is applied locally by ExoPlayer — cache key excludes it.
     val cacheKey: String get() = "${provider.name}|$voice"
 }
 
-/**
- * Chapter audio where each file corresponds to one paragraph by index.
- * paragraphFiles[i] is the MP3 for chapter.paragraphs[i].
- */
+/** Chapter audio where chunkFiles[i] is the MP3 for chapter.chunks[i]. */
 data class ChapterAudio(
     val chapterId: String,
-    val paragraphFiles: List<File>,
+    val chunkFiles: List<File>,
     val config: TtsConfig
 ) {
-    val paragraphCount: Int get() = paragraphFiles.size
-    fun fileAt(index: Int): File? = paragraphFiles.getOrNull(index)
+    val chunkCount: Int get() = chunkFiles.size
+    fun fileAt(index: Int): File? = chunkFiles.getOrNull(index)
 }

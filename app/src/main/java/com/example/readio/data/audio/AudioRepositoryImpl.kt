@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.readio.domain.model.Chapter
 import com.example.readio.domain.model.ChapterAudio
 import com.example.readio.domain.model.TtsConfig
+import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.AudioRepository
 import com.example.readio.domain.repository.ChapterAudioState
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -26,44 +27,42 @@ class AudioRepositoryImpl @Inject constructor(
 
     private val engineMap: Map<TtsProvider, TtsEngine> = engines.associateBy { it.provider }
 
-    override fun getChapterAudio(chapter: Chapter, config: TtsConfig): Flow<ChapterAudioState> =
+    override fun getChapterAudio(chapter: Chapter, ttsConfig: TtsConfig): Flow<ChapterAudioState> =
         channelFlow {
             try {
-                val engine = engineMap[config.provider]
+                val engine = engineMap[ttsConfig.provider]
                     ?: run {
-                        send(ChapterAudioState.Error("No engine registered for ${config.provider.displayName}"))
+                        send(ChapterAudioState.Error("No engine registered for ${ttsConfig.provider.displayName}"))
                         return@channelFlow
                     }
 
-                val persist = config.provider.persistAudio
-                val audioDir = if (persist) persistentDirFor(chapter.id) else tempDirFor(chapter.id)
+                val audioDir = audioDirFor(chapter.id)
+                val cacheKey = audioCacheKey(ttsConfig, chapter.chunkSize)
 
-                if (persist) {
-                    loadCachedAudio(chapter, config, audioDir)?.let {
-                        send(ChapterAudioState.Ready(it))
-                        return@channelFlow
-                    }
+                loadCachedAudio(chapter, ttsConfig, cacheKey, audioDir)?.let {
+                    send(ChapterAudioState.Ready(it))
+                    return@channelFlow
                 }
 
                 audioDir.deleteRecursively()
                 audioDir.mkdirs()
 
-                val paragraphs = chapter.paragraphs
-                send(ChapterAudioState.Generating(0, paragraphs.size))
+                val chunks = chapter.chunks
+                send(ChapterAudioState.Generating(0, chunks.size))
 
                 val files = mutableListOf<File>()
 
-                paragraphs.forEachIndexed { index, paragraph ->
-                    val bytes = engine.synthesize(paragraph.text, config)
-                    val file = File(audioDir, "para_$index.mp3")
+                chunks.forEachIndexed { index, chunk ->
+                    val bytes = engine.synthesize(chunk.text, ttsConfig)
+                    val file = File(audioDir, "chunk_$index.mp3")
                     file.writeBytes(bytes)
                     files += file
-                    send(ChapterAudioState.ParagraphReady(index, file))
-                    send(ChapterAudioState.Generating(index + 1, paragraphs.size))
+                    send(ChapterAudioState.ChunkReady(index, file))
+                    send(ChapterAudioState.Generating(index + 1, chunks.size))
                 }
 
-                if (persist) saveConfigMeta(audioDir, config)
-                send(ChapterAudioState.Ready(ChapterAudio(chapter.id, files, config)))
+                saveCacheKey(audioDir, cacheKey)
+                send(ChapterAudioState.Ready(ChapterAudio(chapter.id, files, ttsConfig)))
 
             } catch (e: kotlinx.coroutines.CancellationException) {
                 throw e
@@ -73,14 +72,13 @@ class AudioRepositoryImpl @Inject constructor(
             }
         }.flowOn(Dispatchers.IO)
 
-    override suspend fun hasChapterAudio(chapterId: String, config: TtsConfig): Boolean {
-        if (!config.provider.persistAudio) return false
-        val dir = persistentDirFor(chapterId)
-        return dir.exists() && readCacheKey(dir) == config.cacheKey
+    override suspend fun hasChapterAudio(chapterId: String, ttsConfig: TtsConfig, chunkSize: Int): Boolean {
+        val dir = audioDirFor(chapterId)
+        return dir.exists() && readCacheKey(dir) == audioCacheKey(ttsConfig, chunkSize)
     }
 
     override suspend fun clearChapterAudio(chapterId: String) {
-        persistentDirFor(chapterId).deleteRecursively()
+        audioDirFor(chapterId).deleteRecursively()
     }
 
     override suspend fun clearAllAudio() {
@@ -89,23 +87,27 @@ class AudioRepositoryImpl @Inject constructor(
 
     // ---- Cache ----
 
-    private fun persistentDirFor(chapterId: String) = File(context.filesDir, "audio/$chapterId")
+    private fun audioCacheKey(ttsConfig: TtsConfig, chunkSize: Int) =
+        "${ttsConfig.cacheKey}|$chunkSize"
 
-    // Local TTS writes to cacheDir — OS-managed, not counted as user storage
-    private fun tempDirFor(chapterId: String) = File(context.cacheDir, "audio_local/$chapterId")
+    private fun audioDirFor(chapterId: String) = File(context.filesDir, "audio/$chapterId")
 
-    private fun saveConfigMeta(dir: File, config: TtsConfig) =
-        File(dir, "config").writeText(config.cacheKey)
+    private fun saveCacheKey(dir: File, key: String) = File(dir, "config").writeText(key)
 
     private fun readCacheKey(dir: File): String? = runCatching {
         File(dir, "config").readText().trim()
     }.getOrNull()
 
-    private fun loadCachedAudio(chapter: Chapter, config: TtsConfig, dir: File): ChapterAudio? {
-        if (!dir.exists() || readCacheKey(dir) != config.cacheKey) return null
-        val files = chapter.paragraphs.mapIndexed { index, _ ->
-            File(dir, "para_$index.mp3").takeIf { it.exists() } ?: return null
+    private fun loadCachedAudio(
+        chapter: Chapter,
+        ttsConfig: TtsConfig,
+        cacheKey: String,
+        dir: File
+    ): ChapterAudio? {
+        if (!dir.exists() || readCacheKey(dir) != cacheKey) return null
+        val files = chapter.chunks.mapIndexed { index, _ ->
+            File(dir, "chunk_$index.mp3").takeIf { it.exists() } ?: return null
         }
-        return ChapterAudio(chapter.id, files, config)
+        return ChapterAudio(chapter.id, files, ttsConfig)
     }
 }

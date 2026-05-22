@@ -3,11 +3,11 @@ package com.example.readio.ui.chapters
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.readio.domain.manager.AudioDownloadManager
+import com.example.readio.domain.model.ChapterAudioStatus
 import com.example.readio.domain.model.ChapterIndex
 import com.example.readio.domain.model.EpubBook
-import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.EpubRepository
-import com.example.readio.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,13 +19,6 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
-sealed class ChapterAudioStatus {
-    data object NotDownloaded : ChapterAudioStatus()
-    data class Downloading(val progress: Float) : ChapterAudioStatus()
-    data object Downloaded : ChapterAudioStatus()
-    data class Error(val message: String) : ChapterAudioStatus()
-}
-
 data class ChapterUiItem(
     val chapterIndex: ChapterIndex,
     val audioStatus: ChapterAudioStatus = ChapterAudioStatus.NotDownloaded
@@ -36,7 +29,6 @@ data class ChapterListUiState(
     val bookTitle: String = "",
     val chapters: List<ChapterUiItem> = emptyList(),
     val isLoading: Boolean = true,
-    val isLocalTts: Boolean = false,
     val isBulkDownloading: Boolean = false,
     val bulkDone: Int = 0,
     val bulkTotal: Int = 0
@@ -46,17 +38,15 @@ data class ChapterListUiState(
 class ChapterListViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val epubRepository: EpubRepository,
-    private val downloadManager: AudioDownloadManager,
-    private val settingsRepository: SettingsRepository
+    private val downloadManager: AudioDownloadManager
 ) : ViewModel() {
 
     private val bookId: String = checkNotNull(savedStateHandle["bookId"])
     private val _book = MutableStateFlow<EpubBook?>(null)
 
     val uiState: StateFlow<ChapterListUiState> = combine(
-        _book, downloadManager.state, settingsRepository.observeTtsConfig()
-    ) { book, dlState, config ->
-        val isLocal = config.provider == TtsProvider.LOCAL_ANDROID
+        _book, downloadManager.state
+    ) { book, dlState ->
         ChapterListUiState(
             bookId = bookId,
             bookTitle = book?.title ?: "",
@@ -64,7 +54,6 @@ class ChapterListViewModel @Inject constructor(
                 ChapterUiItem(c, dlState.statusMap[c.id] ?: ChapterAudioStatus.NotDownloaded)
             } ?: emptyList(),
             isLoading = book == null,
-            isLocalTts = isLocal,
             isBulkDownloading = dlState.isBulkDownloading,
             bulkDone = dlState.bulkDone,
             bulkTotal = dlState.bulkTotal
