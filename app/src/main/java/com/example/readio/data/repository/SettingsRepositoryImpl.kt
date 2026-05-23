@@ -33,11 +33,13 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun saveTtsConfig(config: TtsConfig) {
         dataStore.edit { prefs ->
-            prefs[Keys.PROVIDER]    = config.provider.name
-            prefs[Keys.API_KEY]     = config.apiKey
-            prefs[Keys.REGION]      = config.region
-            prefs[Keys.VOICE]       = config.voice
-            prefs[Keys.SPEECH_RATE] = config.speechRate
+            prefs[Keys.PROVIDER]          = config.provider.name
+            prefs[Keys.ANDROID_LOCALE]    = config.androidLocale
+            prefs[Keys.VOLC_APP_ID]       = config.volcAppId
+            prefs[Keys.VOLC_ACCESS_KEY]   = config.volcAccessKey
+            prefs[Keys.VOLC_RESOURCE_ID]  = config.volcResourceId
+            prefs[Keys.VOLC_SPEAKER]      = config.volcSpeaker
+            prefs[Keys.SPEECH_RATE]       = config.speechRate
         }
     }
 
@@ -51,28 +53,31 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun saveReadingPreferences(prefs: ReadingPreferences) {
         dataStore.edit { data ->
-            data[Keys.CHUNK_SIZE]            = prefs.chunkSize
-            data[Keys.FONT_SIZE]             = prefs.fontSize
-            data[Keys.LINE_HEIGHT]           = prefs.lineHeightMultiplier
-            data[Keys.READING_THEME]         = prefs.readingTheme.name
-            data[Keys.TRANSLATION_LANGUAGE]  = prefs.translationLanguage.name
+            data[Keys.CHUNK_SIZE]           = prefs.chunkSize
+            data[Keys.FONT_SIZE]            = prefs.fontSize
+            data[Keys.LINE_HEIGHT]          = prefs.lineHeightMultiplier
+            data[Keys.READING_THEME]        = prefs.readingTheme.name
+            data[Keys.TRANSLATION_LANGUAGE] = prefs.translationLanguage.name
         }
     }
 
     // ── Mapping ─────────────────────────────────────────────────────────────
 
     private fun Preferences.toTtsConfig() = TtsConfig(
-        provider   = this[Keys.PROVIDER]?.let { runCatching { TtsProvider.valueOf(it) }.getOrNull() }
-                     ?: TtsProvider.AZURE,
-        apiKey     = this[Keys.API_KEY] ?: "",
-        region     = this[Keys.REGION] ?: "eastasia",
-        voice      = this[Keys.VOICE] ?: "zh-CN-XiaoxiaoNeural",
-        speechRate = this[Keys.SPEECH_RATE] ?: 1.0f
+        provider        = this[Keys.PROVIDER]
+                          ?.let { runCatching { TtsProvider.valueOf(it) }.getOrNull() }
+                          ?: TtsProvider.LOCAL_ANDROID,
+        androidLocale   = this[Keys.ANDROID_LOCALE]   ?: "zh-CN",
+        volcAppId       = this[Keys.VOLC_APP_ID]       ?: "",
+        volcAccessKey   = this[Keys.VOLC_ACCESS_KEY]   ?: "",
+        volcResourceId  = this[Keys.VOLC_RESOURCE_ID]  ?: "seed-tts-2.0",
+        volcSpeaker     = this[Keys.VOLC_SPEAKER]      ?: "",
+        speechRate      = this[Keys.SPEECH_RATE]       ?: 1.0f
     )
 
     private fun Preferences.toReadingPreferences() = ReadingPreferences(
         chunkSize            = this[Keys.CHUNK_SIZE] ?: 150,
-        fontSize             = this[Keys.FONT_SIZE] ?: 16,
+        fontSize             = this[Keys.FONT_SIZE]  ?: 16,
         lineHeightMultiplier = this[Keys.LINE_HEIGHT] ?: 1.5f,
         readingTheme         = this[Keys.READING_THEME]
                                ?.let { runCatching { ReadingTheme.valueOf(it) }.getOrNull() }
@@ -83,15 +88,17 @@ class SettingsRepositoryImpl @Inject constructor(
     )
 
     private object Keys {
-        val PROVIDER       = stringPreferencesKey("tts_provider")
-        val API_KEY        = stringPreferencesKey("tts_api_key")
-        val REGION         = stringPreferencesKey("tts_region")
-        val VOICE          = stringPreferencesKey("tts_voice")
-        val SPEECH_RATE    = floatPreferencesKey("tts_speech_rate")
-        val CHUNK_SIZE     = intPreferencesKey("tts_chunk_size")
-        val FONT_SIZE      = intPreferencesKey("reading_font_size")
-        val LINE_HEIGHT    = floatPreferencesKey("reading_line_height")
-        val READING_THEME          = stringPreferencesKey("reading_theme")
-        val TRANSLATION_LANGUAGE   = stringPreferencesKey("translation_language")
+        val PROVIDER          = stringPreferencesKey("tts_provider")
+        val ANDROID_LOCALE    = stringPreferencesKey("tts_android_locale")
+        val VOLC_APP_ID       = stringPreferencesKey("tts_volc_app_id")
+        val VOLC_ACCESS_KEY   = stringPreferencesKey("tts_volc_access_key")
+        val VOLC_RESOURCE_ID  = stringPreferencesKey("tts_volc_resource_id")
+        val VOLC_SPEAKER      = stringPreferencesKey("tts_volc_speaker")
+        val SPEECH_RATE       = floatPreferencesKey("tts_speech_rate")
+        val CHUNK_SIZE        = intPreferencesKey("tts_chunk_size")
+        val FONT_SIZE         = intPreferencesKey("reading_font_size")
+        val LINE_HEIGHT       = floatPreferencesKey("reading_line_height")
+        val READING_THEME         = stringPreferencesKey("reading_theme")
+        val TRANSLATION_LANGUAGE  = stringPreferencesKey("translation_language")
     }
 }

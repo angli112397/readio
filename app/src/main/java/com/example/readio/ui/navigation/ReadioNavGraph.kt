@@ -36,7 +36,6 @@ fun ReadioNavGraph(navController: NavHostController = rememberNavController()) {
         ) {
             ReaderScreen(
                 onBack = { navController.popBackStack() },
-                onSettingsOpen = { navController.navigate(Screen.Settings.route) },
                 onChapterList = { bookId ->
                     navController.navigate(Screen.ChapterList.createRoute(bookId))
                 }

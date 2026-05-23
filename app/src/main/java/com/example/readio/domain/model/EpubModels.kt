@@ -27,23 +27,36 @@ data class Chapter(
     val indexInBook: Int,
     val language: Language,
     val chunkSize: Int,
-    val chunks: List<Chunk>
+    val chunks: List<Chunk>,
+    /** Synthesis atoms — one audio file per sentence. Sentence index = ExoPlayer playlist index. */
+    val sentences: List<Sentence>
 ) {
     val chunkCount: Int get() = chunks.size
     fun chunkAt(index: Int): Chunk? = chunks.getOrNull(index)
 }
 
-/** Display and audio atom: one wheel item, one audio file. */
+/** Display unit: one wheel item. May span multiple [Sentence]s. */
 data class Chunk(
     val id: String,
     val chapterId: String,
     val indexInChapter: Int,
-    val text: String
+    val text: String,
+    /** ExoPlayer playlist index of the first sentence inside this chunk — used for seekTo. */
+    val firstSentenceIndex: Int
 ) {
     companion object {
         fun buildId(chapterId: String, index: Int) = "${chapterId}_$index"
     }
 }
+
+/** Synthesis atom: maps to one audio file (= one ExoPlayer playlist item). */
+data class Sentence(
+    /** Index in the chapter's sentence list — equals the ExoPlayer playlist index. */
+    val indexInChapter: Int,
+    val text: String,
+    /** Which [Chunk] this sentence belongs to — used for display sync. */
+    val chunkIndex: Int
+)
 
 data class ReadingPosition(
     val bookId: String,

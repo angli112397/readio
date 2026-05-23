@@ -33,11 +33,22 @@ class SettingsViewModel @Inject constructor(
     val clearingAudio = _clearingAudio.asStateFlow()
 
     suspend fun save(
-        provider: TtsProvider, apiKey: String, region: String, voice: String, speechRate: Float,
-        chunkSize: Int, fontSize: Int, lineHeightMultiplier: Float,
-        readingTheme: ReadingTheme, translationLanguage: TranslationLanguage
+        provider: TtsProvider,
+        androidLocale: String,
+        volcAppId: String,
+        volcAccessKey: String,
+        volcSpeaker: String,
+        speechRate: Float,
+        chunkSize: Int,
+        fontSize: Int,
+        lineHeightMultiplier: Float,
+        readingTheme: ReadingTheme,
+        translationLanguage: TranslationLanguage
     ) {
-        settingsRepository.saveTtsConfig(TtsConfig(provider, apiKey, region, voice, speechRate))
+        settingsRepository.saveTtsConfig(
+            // volcResourceId is hardcoded — only seed-tts-2.0 is supported.
+            TtsConfig(provider, androidLocale, volcAppId, volcAccessKey, "seed-tts-2.0", volcSpeaker, speechRate)
+        )
         settingsRepository.saveReadingPreferences(
             ReadingPreferences(chunkSize, fontSize, lineHeightMultiplier, readingTheme, translationLanguage)
         )

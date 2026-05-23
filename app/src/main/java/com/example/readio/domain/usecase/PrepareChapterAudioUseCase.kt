@@ -13,8 +13,8 @@ class PrepareChapterAudioUseCase @Inject constructor(
     private val audioRepository: AudioRepository,
     private val settingsRepository: SettingsRepository
 ) {
-    operator fun invoke(chapter: Chapter): Flow<ChapterAudioState> = flow {
+    operator fun invoke(chapter: Chapter, startSentenceIndex: Int = 0): Flow<ChapterAudioState> = flow {
         val ttsConfig = settingsRepository.getTtsConfig()
-        emitAll(audioRepository.getChapterAudio(chapter, ttsConfig))
+        emitAll(audioRepository.getChapterAudio(chapter, ttsConfig, startSentenceIndex))
     }
 }

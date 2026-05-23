@@ -26,14 +26,19 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
+import androidx.compose.ui.unit.Velocity
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.readio.domain.model.Chunk
@@ -55,7 +60,11 @@ fun ChunkWheel(
     modifier: Modifier = Modifier,
     fontSize: TextUnit = 16.sp,
     lineHeightMultiplier: Float = 1.5f,
-    onTranslateTap: (() -> Unit)? = null
+    onTranslateTap: (() -> Unit)? = null,
+    /** Called on the first frame of a user-initiated scroll gesture (not audio-driven scroll). */
+    onScrollStarted: () -> Unit = {},
+    /** False while TTS is synthesizing — locks the wheel to prevent state confusion. */
+    isScrollEnabled: Boolean = true,
 ) {
     if (chunks.isEmpty()) return
 
@@ -65,6 +74,23 @@ fun ChunkWheel(
         initialFirstVisibleItemIndex = maxOf(0, currentIndex - 1)
     )
     val snapBehavior = rememberSnapFlingBehavior(listState)
+
+    // Intercept user-initiated scroll events before they reach the LazyColumn.
+    // NestedScrollSource.UserInput fires only on touch gestures — NOT on programmatic
+    // animateScrollToItem() calls (which use SideEffect source). This lets audio auto-advance
+    // scroll the wheel without triggering onScrollStarted() and stopping playback.
+    val scrollStartConnection = remember(onScrollStarted) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput) onScrollStarted()
+                return Offset.Zero
+            }
+            override suspend fun onPreFling(available: Velocity): Velocity {
+                if (available.y != 0f || available.x != 0f) onScrollStarted()
+                return Velocity.Zero
+            }
+        }
+    }
 
     LaunchedEffect(currentIndex) {
         if (!listState.isScrollInProgress) {
@@ -95,8 +121,11 @@ fun ChunkWheel(
             }
     }
 
-    LaunchedEffect(listState.isScrollInProgress) {
-        if (!listState.isScrollInProgress) onCenterChanged(liveCenterIndex)
+    // Notify caller only when scroll settles (false → true transition is ignored).
+    LaunchedEffect(listState) {
+        snapshotFlow { listState.isScrollInProgress }
+            .distinctUntilChanged()
+            .collect { isScrolling -> if (!isScrolling) onCenterChanged(liveCenterIndex) }
     }
 
     val surfaceColor = MaterialTheme.colorScheme.surface
@@ -120,8 +149,11 @@ fun ChunkWheel(
             LazyColumn(
                 state = listState,
                 flingBehavior = snapBehavior,
+                userScrollEnabled = isScrollEnabled,
                 contentPadding = PaddingValues(vertical = verticalPadding),
-                modifier = Modifier.fillMaxSize()
+                modifier = Modifier
+                    .fillMaxSize()
+                    .nestedScroll(scrollStartConnection)
             ) {
                 itemsIndexed(chunks, key = { _, c -> c.id }) { index, chunk ->
 

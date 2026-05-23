@@ -1,5 +1,6 @@
 package com.example.readio.domain.usecase
 
+import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.AudioRepository
 import com.example.readio.domain.repository.ChapterAudioState
 import com.example.readio.domain.repository.EpubRepository
@@ -23,13 +24,21 @@ class DownloadChapterAudioUseCase @Inject constructor(
 ) {
     operator fun invoke(bookId: String, chapterId: String): Flow<DownloadProgress> = flow {
         val ttsConfig = settingsRepository.getTtsConfig()
-        val prefs = settingsRepository.getReadingPreferences()
-        if (audioRepository.hasChapterAudio(chapterId, ttsConfig, prefs.chunkSize)) {
+
+        // Download only makes sense for Volcengine
+        if (ttsConfig.provider != TtsProvider.VOLCENGINE) {
             emit(DownloadProgress.Complete)
             return@flow
         }
+
+        if (audioRepository.hasChapterAudio(chapterId, ttsConfig)) {
+            emit(DownloadProgress.Complete)
+            return@flow
+        }
+
+        val prefs   = settingsRepository.getReadingPreferences()
         val chapter = epubRepository.loadChapter(bookId, chapterId, prefs.chunkSize)
-        emitAll(audioRepository.getChapterAudio(chapter, ttsConfig).toDownloadProgress())
+        emitAll(audioRepository.downloadChapterAudio(chapter, ttsConfig).toDownloadProgress())
     }
 
     private fun Flow<ChapterAudioState>.toDownloadProgress(): Flow<DownloadProgress> =

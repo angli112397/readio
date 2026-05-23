@@ -12,6 +12,7 @@ import com.example.readio.domain.model.Chapter
 import com.example.readio.domain.model.Chunk
 import com.example.readio.domain.model.EpubBook
 import com.example.readio.domain.model.Language
+import com.example.readio.domain.model.Sentence
 import com.example.readio.domain.repository.EpubRepository
 import com.example.readio.domain.service.TextChunker
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -94,23 +95,40 @@ class EpubRepositoryImpl @Inject constructor(
 
             val rawTexts = epubParser.parseChapterTexts(epubFileFor(bookId), chapterEntity.href)
             val bookLanguage = Language.fromTag(bookEntity.language)
-            val chunkTexts = TextChunker.chunk(rawTexts, chunkSize, bookLanguage)
+            val result = TextChunker.chunk(rawTexts, chunkSize, bookLanguage)
+
+            // O(n) reverse map: chunkIndex → first sentence index in that chunk.
+            val firstSentByChunk = IntArray(result.chunkTexts.size) { -1 }
+            result.sentenceToChunk.forEachIndexed { si, ci ->
+                if (firstSentByChunk[ci] < 0) firstSentByChunk[ci] = si
+            }
+
+            val chunks = result.chunkTexts.mapIndexed { ci, text ->
+                Chunk(
+                    id = Chunk.buildId(chapterId, ci),
+                    chapterId = chapterId,
+                    indexInChapter = ci,
+                    text = text,
+                    firstSentenceIndex = firstSentByChunk[ci].coerceAtLeast(0)
+                )
+            }
+            val sentences = result.sentenceTexts.mapIndexed { si, text ->
+                Sentence(
+                    indexInChapter = si,
+                    text = text,
+                    chunkIndex = result.sentenceToChunk[si]
+                )
+            }
 
             val chapter = Chapter(
                 id = chapterId,
                 bookId = bookId,
                 title = chapterEntity.title,
                 indexInBook = chapterEntity.indexInBook,
-                language = Language.fromTag(bookEntity.language),
+                language = bookLanguage,
                 chunkSize = chunkSize,
-                chunks = chunkTexts.mapIndexed { index, text ->
-                    Chunk(
-                        id = Chunk.buildId(chapterId, index),
-                        chapterId = chapterId,
-                        indexInChapter = index,
-                        text = text
-                    )
-                }
+                chunks = chunks,
+                sentences = sentences
             )
             synchronized(chapterCache) { chapterCache[cacheKey] = chapter }
             chapter

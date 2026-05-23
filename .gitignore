@@ -22,3 +22,7 @@ captures/
 # macOS
 .DS_Store
 .claude/
+
+# Scripts: test outputs and Python virtualenv
+scripts/*.mp3
+scripts/venv/

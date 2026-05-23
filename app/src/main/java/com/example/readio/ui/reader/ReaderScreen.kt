@@ -16,7 +16,6 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,7 +29,6 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 @Composable
 fun ReaderScreen(
     onBack: () -> Unit,
-    onSettingsOpen: () -> Unit,
     onChapterList: (bookId: String) -> Unit = {},
     viewModel: ReaderViewModel = hiltViewModel()
 ) {
@@ -70,9 +68,6 @@ fun ReaderScreen(
                     IconButton(onClick = { onChapterList(viewModel.bookId) }) {
                         Icon(Icons.AutoMirrored.Filled.List, contentDescription = "章节列表")
                     }
-                    IconButton(onClick = onSettingsOpen) {
-                        Icon(Icons.Default.Settings, contentDescription = "设置")
-                    }
                 }
             )
         },
@@ -110,6 +105,8 @@ fun ReaderScreen(
                     fontSize = prefs.fontSize.sp,
                     lineHeightMultiplier = prefs.lineHeightMultiplier,
                     onTranslateTap = viewModel::onTranslateTap,
+                    onScrollStarted = viewModel::onScrollStarted,
+                    isScrollEnabled = !state.audioGenerating,
                     modifier = Modifier.fillMaxSize()
                 )
             }

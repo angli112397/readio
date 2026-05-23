@@ -26,7 +26,7 @@ class AndroidTtsEngine @Inject constructor(
     @ApplicationContext private val context: Context
 ) : TtsEngine {
 
-    override val provider = TtsProvider.LOCAL_ANDROID
+    override val provider: TtsProvider = TtsProvider.LOCAL_ANDROID
 
     private val initDeferred = CompletableDeferred<Unit>()
 
@@ -49,13 +49,13 @@ class AndroidTtsEngine @Inject constructor(
         withContext(Dispatchers.IO) {
             initDeferred.await()
             synthesizeMutex.withLock {
-                if (config.voice != configuredVoice) {
-                    val locale = Locale.forLanguageTag(config.voice)
+                if (config.androidLocale != configuredVoice) {
+                    val locale = Locale.forLanguageTag(config.androidLocale)
                     val result = tts.setLanguage(locale)
                     if (result == TextToSpeech.LANG_MISSING_DATA || result == TextToSpeech.LANG_NOT_SUPPORTED) {
-                        throw IOException("系统 TTS 不支持语言 '${config.voice}'。请在系统设置中安装对应语言包。")
+                        throw IOException("系统 TTS 不支持语言 '${config.androidLocale}'。请在系统设置中安装对应语言包。")
                     }
-                    configuredVoice = config.voice
+                    configuredVoice = config.androidLocale
                 }
 
                 val tempFile = File.createTempFile("tts_", ".wav", context.cacheDir)
@@ -66,14 +66,18 @@ class AndroidTtsEngine @Inject constructor(
                             override fun onDone(id: String) {
                                 if (cont.isActive) cont.resume(Unit)
                             }
+                            // Override both overloads: the deprecated one may be skipped on
+                            // newer Android versions if only onError(String, Int) is dispatched.
                             @Suppress("DEPRECATION")
-                            override fun onError(id: String) {
+                            override fun onError(id: String) = onError(id, -1)
+                            override fun onError(id: String, errorCode: Int) {
                                 if (cont.isActive) cont.resumeWithException(
-                                    IOException("Android TTS synthesis failed")
+                                    IOException("Android TTS synthesis failed (error=$errorCode)")
                                 )
                             }
                         })
-                        if (tts.synthesizeToFile(text, Bundle(), tempFile, tempFile.name) == TextToSpeech.ERROR) {
+                        val cleaned = cleanForTts(text)
+                if (tts.synthesizeToFile(cleaned, Bundle(), tempFile, tempFile.name) == TextToSpeech.ERROR) {
                             if (cont.isActive) cont.resumeWithException(
                                 IOException("Android TTS: failed to queue synthesis")
                             )
