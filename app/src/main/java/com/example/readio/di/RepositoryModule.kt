@@ -1,6 +1,8 @@
 package com.example.readio.di
 
 import com.example.readio.data.audio.AudioRepositoryImpl
+import com.example.readio.data.audio.cache.AudioCache
+import com.example.readio.data.audio.cache.AudioCacheImpl
 import com.example.readio.data.repository.EpubRepositoryImpl
 import com.example.readio.data.repository.ReadingProgressRepositoryImpl
 import com.example.readio.data.repository.SettingsRepositoryImpl
@@ -21,6 +23,9 @@ import javax.inject.Singleton
 @Module
 @InstallIn(SingletonComponent::class)
 abstract class RepositoryModule {
+
+    @Binds @Singleton
+    abstract fun bindAudioCache(impl: AudioCacheImpl): AudioCache
 
     @Binds @Singleton
     abstract fun bindSettingsRepository(impl: SettingsRepositoryImpl): SettingsRepository

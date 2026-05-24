@@ -13,6 +13,7 @@ import com.example.readio.domain.model.Chunk
 import com.example.readio.domain.model.EpubBook
 import com.example.readio.domain.model.Language
 import com.example.readio.domain.model.Sentence
+import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.EpubRepository
 import com.example.readio.domain.service.TextChunker
 import dagger.hilt.android.qualifiers.ApplicationContext
@@ -132,6 +133,11 @@ class EpubRepositoryImpl @Inject constructor(
             )
             synchronized(chapterCache) { chapterCache[cacheKey] = chapter }
             chapter
+        }
+
+    override suspend fun updateBookTts(bookId: String, provider: TtsProvider?, voiceId: String?) =
+        withContext(Dispatchers.IO) {
+            bookDao.updateTts(bookId, provider?.name, voiceId)
         }
 
     private fun epubFileFor(bookId: String): File {

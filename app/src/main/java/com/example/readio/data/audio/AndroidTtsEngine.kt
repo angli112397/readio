@@ -4,7 +4,9 @@ import android.content.Context
 import android.os.Bundle
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import com.example.readio.domain.engine.RealtimeTtsEngine
 import com.example.readio.domain.model.TtsConfig
+import com.example.readio.domain.model.TtsProvider
 import dagger.hilt.android.qualifiers.ApplicationContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -23,7 +25,9 @@ import kotlin.coroutines.resumeWithException
 @Singleton
 class AndroidTtsEngine @Inject constructor(
     @ApplicationContext private val context: Context
-) : LocalTtsEngine {
+) : RealtimeTtsEngine {
+
+    override val provider: TtsProvider = TtsProvider.LOCAL_ANDROID
 
     private val initDeferred = CompletableDeferred<Unit>()
 

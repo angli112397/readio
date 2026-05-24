@@ -33,7 +33,6 @@ fun ChapterListScreen(
     val state by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
 
-    // Forward one-shot messages (e.g., "task still pending") to the snackbar.
     LaunchedEffect(Unit) {
         viewModel.messages.collectLatest { msg ->
             snackbarHostState.showSnackbar(msg, duration = SnackbarDuration.Short)
@@ -49,7 +48,7 @@ fun ChapterListScreen(
                         Text(state.bookTitle, maxLines = 1, overflow = TextOverflow.Ellipsis)
                         if (state.isBulkDownloading) {
                             Text(
-                                "正在提交 ${state.bulkDone}/${state.bulkTotal}…",
+                                "正在下载 ${state.bulkDone}/${state.bulkTotal}…",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )
@@ -69,13 +68,13 @@ fun ChapterListScreen(
                             }
                         } else {
                             IconButton(
-                                onClick = viewModel::submitAll,
+                                onClick = viewModel::downloadAll,
                                 enabled = state.chapters.any {
                                     it.audioStatus is ChapterAudioStatus.NotDownloaded ||
                                     it.audioStatus is ChapterAudioStatus.Error
                                 }
                             ) {
-                                Icon(Icons.Default.Download, contentDescription = "全部提交")
+                                Icon(Icons.Default.Download, contentDescription = "全部下载")
                             }
                         }
                     }
@@ -98,15 +97,15 @@ fun ChapterListScreen(
                 ) {
                     itemsIndexed(state.chapters, key = { _, item -> item.chapterIndex.id }) { _, item ->
                         ChapterItem(
-                            item = item,
+                            item              = item,
                             showAudioControls = state.isDownloadableProvider,
-                            onClick = { onOpenChapter(item.chapterIndex.id) },
-                            onSubmitTask = { viewModel.submitTask(item) },
-                            onFetchResult = { viewModel.fetchResult(item) },
-                            onImportTaskId = { taskId -> viewModel.importTaskId(item.chapterIndex.id, taskId) },
-                            onClear = { viewModel.clearChapter(item) }
+                            onClick           = { onOpenChapter(item.chapterIndex.id) },
+                            onDownload        = { viewModel.downloadChapter(item) },
+                            onImportTaskId    = { taskId -> viewModel.importTaskId(item.chapterIndex.id, taskId) },
+                            onClear           = { viewModel.clearChapter(item) }
                         )
-                        HorizontalDivider(thickness = 0.5.dp, color = MaterialTheme.colorScheme.outlineVariant)
+                        HorizontalDivider(thickness = 0.5.dp,
+                            color = MaterialTheme.colorScheme.outlineVariant)
                     }
                 }
             }
@@ -119,15 +118,13 @@ private fun ChapterItem(
     item: ChapterUiItem,
     showAudioControls: Boolean,
     onClick: () -> Unit,
-    onSubmitTask: () -> Unit,
-    onFetchResult: () -> Unit,
+    onDownload: () -> Unit,
     onImportTaskId: (String) -> Unit,
     onClear: () -> Unit
 ) {
     var showClearDialog by remember { mutableStateOf(false) }
-    var showTaskDialog by remember { mutableStateOf(false) }
-    // true = opened from download icon (NotDownloaded); false = opened from hourglass (HasTaskId)
-    var taskDialogIsNew by remember { mutableStateOf(false) }
+    /** Import-task-ID dialog — only for the edge case where user has an external task ID. */
+    var showImportDialog by remember { mutableStateOf(false) }
 
     // ── Clear confirmation ────────────────────────────────────────────────────
     if (showClearDialog) {
@@ -146,58 +143,42 @@ private fun ChapterItem(
         )
     }
 
-    // ── Task ID dialog ────────────────────────────────────────────────────────
-    // Opens from the download icon (taskDialogIsNew=true) or hourglass (false).
-    if (showTaskDialog) {
-        val currentTaskId = (item.audioStatus as? ChapterAudioStatus.HasTaskId)?.taskId ?: ""
-        var taskIdInput by remember(currentTaskId) { mutableStateOf(currentTaskId) }
-
+    // ── Import task ID dialog ─────────────────────────────────────────────────
+    // Only needed when user wants to paste a task ID from an external source.
+    if (showImportDialog) {
+        var taskIdInput by remember { mutableStateOf("") }
         AlertDialog(
-            onDismissRequest = { showTaskDialog = false },
-            title = { Text("任务 ID") },
+            onDismissRequest = { showImportDialog = false },
+            title = { Text("粘贴任务 ID") },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
-                        if (taskDialogIsNew)
-                            "粘贴已有 Task ID 直接获取结果，或留空新建合成任务。"
-                        else
-                            "任务已提交，合成完成后点「获取结果」下载音频。\n" +
-                            "也可粘贴其他 Task ID 覆盖。",
+                        "如果你已有 Volcengine 合成任务 ID，粘贴后点「导入并下载」。\n" +
+                        "否则直接关闭此对话框，点下载按钮新建任务。",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                     OutlinedTextField(
-                        value = taskIdInput,
+                        value         = taskIdInput,
                         onValueChange = { taskIdInput = it },
-                        label = { Text("Task ID（留空则新建任务）") },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth()
+                        label         = { Text("Task ID") },
+                        singleLine    = true,
+                        modifier      = Modifier.fillMaxWidth()
                     )
                 }
             },
             confirmButton = {
-                // "获取结果" — import the given ID (or existing) and fetch
                 TextButton(
                     enabled = taskIdInput.isNotBlank(),
                     onClick = {
-                        showTaskDialog = false
-                        if (taskIdInput.trim() != currentTaskId) {
-                            onImportTaskId(taskIdInput.trim())
-                        }
-                        onFetchResult()
+                        showImportDialog = false
+                        onImportTaskId(taskIdInput.trim())
+                        onDownload()
                     }
-                ) { Text("获取结果") }
+                ) { Text("导入并下载") }
             },
             dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    // "新建任务" — only show when opened from download icon
-                    if (taskDialogIsNew) {
-                        TextButton(onClick = { showTaskDialog = false; onSubmitTask() }) {
-                            Text("新建任务")
-                        }
-                    }
-                    TextButton(onClick = { showTaskDialog = false }) { Text("取消") }
-                }
+                TextButton(onClick = { showImportDialog = false }) { Text("取消") }
             }
         )
     }
@@ -211,69 +192,77 @@ private fun ChapterItem(
         horizontalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
-            text = "${item.chapterIndex.indexInBook + 1}",
+            text  = "${item.chapterIndex.indexInBook + 1}",
             style = MaterialTheme.typography.labelMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.width(32.dp)
         )
 
-        Text(
-            text = item.chapterIndex.title,
-            style = MaterialTheme.typography.bodyMedium,
-            fontWeight = FontWeight.Medium,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f)
-        )
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text     = item.chapterIndex.title,
+                style    = MaterialTheme.typography.bodyMedium,
+                fontWeight = FontWeight.Medium,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis
+            )
+            // Show progress label when downloading
+            val label = (item.audioStatus as? ChapterAudioStatus.Downloading)?.label
+            if (!label.isNullOrBlank()) {
+                Text(
+                    text  = label,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        }
 
         if (showAudioControls) {
             when (val status = item.audioStatus) {
                 is ChapterAudioStatus.NotDownloaded -> {
-                    IconButton(
-                        onClick = { taskDialogIsNew = true; showTaskDialog = true },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = "提交合成任务",
+                    IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
+                        Icon(Icons.Default.Download, contentDescription = "下载音频",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+
                 is ChapterAudioStatus.HasTaskId -> {
-                    IconButton(
-                        onClick = { taskDialogIsNew = false; showTaskDialog = true },
-                        modifier = Modifier.size(40.dp)
-                    ) {
+                    // Task was submitted in a previous session; resume polling by calling download.
+                    IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
                         Icon(
                             Icons.Default.HourglassEmpty,
-                            contentDescription = "任务已提交，点击获取结果",
+                            contentDescription = "任务已提交，点击继续下载",
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
                 }
+
                 is ChapterAudioStatus.Downloading -> {
                     Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
                         CircularProgressIndicator(
-                            progress = { status.progress },
-                            modifier = Modifier.size(24.dp),
+                            progress  = { status.progress },
+                            modifier  = Modifier.size(24.dp),
                             strokeWidth = 2.5.dp
                         )
                     }
                 }
+
                 is ChapterAudioStatus.Downloaded -> {
-                    IconButton(onClick = { showClearDialog = true }, modifier = Modifier.size(40.dp)) {
+                    IconButton(onClick = { showClearDialog = true },
+                        modifier = Modifier.size(40.dp)) {
                         Icon(Icons.Default.Delete, contentDescription = "删除音频缓存",
                             tint = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
+
                 is ChapterAudioStatus.Error -> {
-                    IconButton(
-                        onClick = { taskDialogIsNew = true; showTaskDialog = true },
-                        modifier = Modifier.size(40.dp)
-                    ) {
-                        Icon(Icons.Default.Warning, contentDescription = "查看错误 / 重试",
+                    IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
+                        Icon(Icons.Default.Warning, contentDescription = "下载失败，点击重试",
                             tint = MaterialTheme.colorScheme.error)
                     }
                 }
-                is ChapterAudioStatus.NotApplicable -> { /* LOCAL TTS, no icon */ }
+
+                is ChapterAudioStatus.NotApplicable -> { /* Realtime TTS: no download icon */ }
             }
         }
     }

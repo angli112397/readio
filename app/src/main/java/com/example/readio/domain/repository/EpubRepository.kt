@@ -3,6 +3,7 @@ package com.example.readio.domain.repository
 import android.net.Uri
 import com.example.readio.domain.model.Chapter
 import com.example.readio.domain.model.EpubBook
+import com.example.readio.domain.model.TtsProvider
 import kotlinx.coroutines.flow.Flow
 
 interface EpubRepository {
@@ -18,4 +19,6 @@ interface EpubRepository {
      * LRU 缓存由实现层管理（key = chapterId|chunkSize）。
      */
     suspend fun loadChapter(bookId: String, chapterId: String, chunkSize: Int): Chapter
+
+    suspend fun updateBookTts(bookId: String, provider: TtsProvider?, voiceId: String?)
 }

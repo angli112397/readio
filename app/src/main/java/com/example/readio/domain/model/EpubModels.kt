@@ -7,7 +7,9 @@ data class EpubBook(
     val language: Language,
     val coverImagePath: String?,
     val chapters: List<ChapterIndex>,
-    val importedAt: Long = System.currentTimeMillis()
+    val importedAt: Long = System.currentTimeMillis(),
+    val ttsProvider: TtsProvider? = null,
+    val ttsVoice: String? = null,
 ) {
     val chapterCount: Int get() = chapters.size
 }

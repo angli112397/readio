@@ -1,9 +1,11 @@
 package com.example.readio.domain.model
 
+import com.example.readio.domain.engine.SentenceTiming
 import java.io.File
 
 enum class TtsProvider(val displayName: String) {
     LOCAL_ANDROID("系统 TTS（实时）"),
+    LOCAL_SHERPA_ONNX("本地神经网络（离线）"),
     VOLCENGINE("火山引擎豆包（离线）")
 }
 
@@ -20,28 +22,41 @@ data class TtsConfig(
 ) {
     // Rate excluded from cache key — applied locally via ExoPlayer setPlaybackSpeed.
     val cacheKey: String get() = when (provider) {
-        TtsProvider.LOCAL_ANDROID -> "LOCAL|$androidLocale"
-        TtsProvider.VOLCENGINE   -> "VOLC|$volcSpeaker"
+        TtsProvider.LOCAL_ANDROID     -> "LOCAL|$androidLocale"
+        TtsProvider.LOCAL_SHERPA_ONNX -> "SHERPA"
+        TtsProvider.VOLCENGINE        -> "VOLC|$volcSpeaker"
+    }
+
+    /**
+     * Returns a copy of this config with [provider] and [voiceId] applied as a per-book override.
+     * [provider] null → returns this unchanged.
+     * Maps [voiceId] to the correct field: androidLocale for LOCAL_ANDROID,
+     * volcSpeaker for VOLCENGINE; for LOCAL_SHERPA_ONNX the voice field is irrelevant.
+     */
+    fun applyBookOverride(provider: TtsProvider?, voiceId: String?): TtsConfig {
+        if (provider == null) return this
+        return copy(
+            provider      = provider,
+            androidLocale = if (provider == TtsProvider.LOCAL_ANDROID) voiceId ?: androidLocale else androidLocale,
+            volcSpeaker   = if (provider == TtsProvider.VOLCENGINE)    voiceId ?: volcSpeaker   else volcSpeaker,
+        )
     }
 }
 
-/** Timestamp for one sentence in the Volcengine chapter audio. */
-data class SentenceTimestamp(val startMs: Long, val endMs: Long)
-
 sealed class AudioSource {
     /**
-     * Local TTS: one WAV per sentence in [cacheDir] (ephemeral, system-managed).
-     * files[i] corresponds to ExoPlayer playlist item i.
+     * Realtime TTS (LOCAL_ANDROID, LOCAL_SHERPA_ONNX): one WAV per sentence in cacheDir.
+     * [files][i] corresponds to ExoPlayer playlist item i.
      */
     data class PerSentence(val files: List<File>) : AudioSource()
 
     /**
-     * Volcengine: single MP3 for the entire chapter + per-sentence timestamps.
-     * ExoPlayer items are built with [MediaItem.ClippingConfiguration].
+     * Batch TTS (Volcengine): single MP3 for the entire chapter + per-atom timings.
+     * [timings][i].startMs/endMs drives ChunkWheel sync via position-polling.
      */
     data class SingleFile(
         val audioFile: File,
-        val timestamps: List<SentenceTimestamp>
+        val timings: List<SentenceTiming>
     ) : AudioSource()
 }
 
@@ -49,24 +64,16 @@ sealed class AudioSource {
  * Resolved audio for a chapter, ready for ExoPlayer.
  *
  * [sentenceToChunk] unifies sync for both audio sources:
- *   - PerSentence: sentenceToChunk[i] = chapter.sentences[i].chunkIndex
- *   - SingleFile:  sentenceToChunk[i] = Volcengine sentence i → nearest display chunk
- *
- * This lets [ReaderViewModel] use the same onMediaItemTransition logic regardless of source.
+ *   - PerSentence:  sentenceToChunk[playlistIndex + playlistOffset] = chunkIndex
+ *   - SingleFile:   sentenceToChunk[i] = timings[i].chunkIndex (from SynthesisManifest)
  */
 data class ChapterAudio(
     val chapterId: String,
     val source: AudioSource,
-    /**
-     * Maps ExoPlayer playlist index → display chunk index.
-     * For LOCAL_ANDROID: sentenceToChunk[playlistIndex + playlistOffset] = chunkIndex
-     * For VOLCENGINE:    sentenceToChunk[playlistIndex] = chunkIndex  (offset always 0)
-     */
     val sentenceToChunk: List<Int>,
     val config: TtsConfig,
     /**
-     * Sentence index of playlist item 0 — non-zero when LOCAL_ANDROID synthesis
-     * starts mid-chapter (user was already at a later position).
+     * Sentence index of playlist item 0 — non-zero when realtime synthesis starts mid-chapter.
      * sentenceIndex = playlistIndex + playlistOffset.
      */
     val playlistOffset: Int = 0

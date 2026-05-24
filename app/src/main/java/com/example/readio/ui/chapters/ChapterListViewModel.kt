@@ -33,6 +33,7 @@ data class ChapterListUiState(
     val bookTitle: String = "",
     val chapters: List<ChapterUiItem> = emptyList(),
     val isLoading: Boolean = true,
+    /** True when the active TTS provider supports pre-download (batch engines). */
     val isDownloadableProvider: Boolean = false,
     val isBulkDownloading: Boolean = false,
     val bulkDone: Int = 0,
@@ -54,20 +55,20 @@ class ChapterListViewModel @Inject constructor(
         _book, downloadManager.state, settingsRepository.observeTtsConfig()
     ) { book, dlState, ttsConfig ->
         ChapterListUiState(
-            bookId = bookId,
-            bookTitle = book?.title ?: "",
-            chapters = book?.chapters?.map { c ->
+            bookId               = bookId,
+            bookTitle            = book?.title ?: "",
+            chapters             = book?.chapters?.map { c ->
                 ChapterUiItem(c, dlState.statusMap[c.id] ?: ChapterAudioStatus.NotDownloaded)
             } ?: emptyList(),
-            isLoading = book == null,
+            isLoading            = book == null,
             isDownloadableProvider = ttsConfig.provider == TtsProvider.VOLCENGINE,
-            isBulkDownloading = dlState.isBulkDownloading,
-            bulkDone = dlState.bulkDone,
-            bulkTotal = dlState.bulkTotal
+            isBulkDownloading    = dlState.isBulkDownloading,
+            bulkDone             = dlState.bulkDone,
+            bulkTotal            = dlState.bulkTotal
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), ChapterListUiState())
 
-    /** One-shot messages forwarded from the download manager (e.g., "task still pending"). */
+    /** One-shot messages forwarded from the download manager. */
     val messages = downloadManager.messages
 
     init {
@@ -80,22 +81,26 @@ class ChapterListViewModel @Inject constructor(
         }
     }
 
-    /** Submit a new TTS task for this chapter (no polling — user fetches result later). */
-    fun submitTask(item: ChapterUiItem) =
-        downloadManager.submitChapterTask(bookId, item.chapterIndex)
+    /**
+     * Start (or resume) downloading audio for [item].
+     *
+     * If the chapter has a [ChapterAudioStatus.HasTaskId], the engine automatically picks up
+     * the saved task ID and continues polling without re-submitting.
+     */
+    fun downloadChapter(item: ChapterUiItem) =
+        downloadManager.downloadChapter(bookId, item.chapterIndex)
 
-    /** Persist an existing task ID without making any API call. */
+    /**
+     * Persist an externally-obtained task ID without making any API call.
+     * Useful if the user obtained a task ID from a previous session.
+     */
     fun importTaskId(chapterId: String, taskId: String) =
         downloadManager.importTaskId(chapterId, taskId)
 
-    /** Query the task once and download audio if it's ready. */
-    fun fetchResult(item: ChapterUiItem) =
-        downloadManager.fetchChapterResult(bookId, item.chapterIndex)
-
-    /** Submit TTS tasks for all chapters that don't have audio (parallel, fast). */
-    fun submitAll() {
+    /** Start downloading all chapters that are not yet downloaded. */
+    fun downloadAll() {
         val chapters = _book.value?.chapters ?: return
-        downloadManager.submitAll(bookId, chapters)
+        downloadManager.downloadAll(bookId, chapters)
     }
 
     fun cancelBulkDownload() = downloadManager.cancelBulk()

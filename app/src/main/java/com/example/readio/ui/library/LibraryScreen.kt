@@ -23,6 +23,9 @@ import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.readio.domain.model.EpubBook
+import com.example.readio.domain.model.TtsProvider
+import com.example.readio.ui.settings.TtsChoice
+import com.example.readio.ui.settings.TtsVoiceCatalog
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -34,6 +37,7 @@ fun LibraryScreen(
     val books by viewModel.books.collectAsStateWithLifecycle()
     val importing by viewModel.importing.collectAsStateWithLifecycle()
     val error by viewModel.error.collectAsStateWithLifecycle()
+    val sherpaModelReady by viewModel.sherpaModelReady.collectAsStateWithLifecycle()
 
     val launcher = rememberLauncherForActivityResult(GetContent()) { uri ->
         uri?.let { viewModel.import(it) }
@@ -87,8 +91,10 @@ fun LibraryScreen(
                 items(books, key = { it.id }) { book ->
                     BookCard(
                         book = book,
+                        sherpaModelReady = sherpaModelReady,
                         onClick = { onBookOpen(book.id) },
-                        onDelete = { viewModel.delete(book) }
+                        onDelete = { viewModel.delete(book) },
+                        onTtsChange = { provider, voice -> viewModel.setBookTts(book.id, provider, voice) }
                     )
                 }
             }
@@ -99,10 +105,14 @@ fun LibraryScreen(
 @Composable
 private fun BookCard(
     book: EpubBook,
+    sherpaModelReady: Boolean,
     onClick: () -> Unit,
-    onDelete: () -> Unit
+    onDelete: () -> Unit,
+    onTtsChange: (TtsProvider?, String?) -> Unit
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
+    var showTtsDialog by remember { mutableStateOf(false) }
+    val currentChoice = TtsVoiceCatalog.findChoice(book.ttsProvider, book.ttsVoice)
 
     if (showDeleteDialog) {
         AlertDialog(
@@ -117,6 +127,18 @@ private fun BookCard(
             dismissButton = {
                 TextButton(onClick = { showDeleteDialog = false }) { Text("取消") }
             }
+        )
+    }
+
+    if (showTtsDialog) {
+        TtsPickerDialog(
+            currentChoice = currentChoice,
+            sherpaModelReady = sherpaModelReady,
+            onSelect = { choice ->
+                onTtsChange(choice?.provider, choice?.voiceId)
+                showTtsDialog = false
+            },
+            onDismiss = { showTtsDialog = false }
         )
     }
 
@@ -165,6 +187,18 @@ private fun BookCard(
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
+                AssistChip(
+                    onClick = { showTtsDialog = true },
+                    label = {
+                        Text(
+                            currentChoice?.label ?: "默认 TTS",
+                            style = MaterialTheme.typography.labelSmall,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    modifier = Modifier.padding(top = 2.dp).height(24.dp)
+                )
             }
 
             IconButton(onClick = { showDeleteDialog = true }) {
@@ -176,6 +210,66 @@ private fun BookCard(
             }
         }
     }
+}
+
+@Composable
+private fun TtsPickerDialog(
+    currentChoice: TtsChoice?,
+    sherpaModelReady: Boolean,
+    onSelect: (TtsChoice?) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("朗读方式") },
+        text = {
+            LazyColumn {
+                item {
+                    TextButton(
+                        onClick = { onSelect(null) },
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            "默认（跟随全局设置）",
+                            color = if (currentChoice == null) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurface
+                        )
+                    }
+                    HorizontalDivider()
+                }
+                items(TtsVoiceCatalog.allChoices) { choice ->
+                    val isSherpa = choice.provider == TtsProvider.LOCAL_SHERPA_ONNX
+                    val sherpaNotReady = isSherpa && !sherpaModelReady
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        TextButton(
+                            onClick = { onSelect(choice) },
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Text(
+                                choice.label,
+                                color = when {
+                                    choice == currentChoice -> MaterialTheme.colorScheme.primary
+                                    else -> MaterialTheme.colorScheme.onSurface
+                                }
+                            )
+                        }
+                        // Warn when the VITS model has not been imported yet.
+                        if (sherpaNotReady) {
+                            Text(
+                                "⚠ 尚未导入语音包，请先前往设置导入 .tar.bz2 文件",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp, end = 12.dp)
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        }
+    )
 }
 
 @Composable

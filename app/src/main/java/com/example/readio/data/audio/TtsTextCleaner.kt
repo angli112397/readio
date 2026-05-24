@@ -18,6 +18,12 @@ package com.example.readio.data.audio
 internal fun cleanForTts(text: String): String {
     var s = text
 
+    // 0. Strip http/https URLs — ad atoms like "(http://example.com)" should produce
+    //    blank text so callers can skip them entirely (avoids firstChunk hijacking in
+    //    buildTrueSentences / computeSentenceToChunk).  Must run before step 3 so the
+    //    surrounding brackets are removed in that step.
+    s = s.replace(Regex("""https?://[\w\-._~:/?#\[\]@!${'$'}&'*+,;=%]+"""), "")
+
     // 1. Collapse all whitespace (handles EPUB newlines, indentation, <br> artifacts)
     s = s.replace(Regex("""\s+"""), " ").trim()
 

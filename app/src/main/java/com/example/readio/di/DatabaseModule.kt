@@ -2,6 +2,7 @@ package com.example.readio.di
 
 import android.content.Context
 import androidx.room.Room
+import com.example.readio.data.db.MIGRATION_1_2
 import com.example.readio.data.db.ReadioDatabase
 import com.example.readio.data.db.dao.BookDao
 import com.example.readio.data.db.dao.ChapterIndexDao
@@ -21,6 +22,7 @@ object DatabaseModule {
     @Singleton
     fun provideDatabase(@ApplicationContext context: Context): ReadioDatabase =
         Room.databaseBuilder(context, ReadioDatabase::class.java, "readio.db")
+            .addMigrations(MIGRATION_1_2)
             .fallbackToDestructiveMigration(true)
             .build()
 

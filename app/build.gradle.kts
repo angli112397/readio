@@ -98,6 +98,14 @@ dependencies {
     // ML Kit Translation (offline, ~15 MB per language pair, downloaded on demand)
     implementation("com.google.mlkit:translate:17.0.3")
 
+    // Sherpa-ONNX — local neural TTS (Kokoro for EN, MeloTTS for ZH).
+    // AAR is published to GitHub Releases; JitPack re-hosts it.
+    // Models (~160–310 MB each) are downloaded at runtime on first use.
+    implementation("com.github.k2-fsa:sherpa-onnx:v1.13.1")
+
+    // tar.bz2 extraction for sherpa-onnx model archives
+    implementation("org.apache.commons:commons-compress:1.27.1")
+
     // Test
     testImplementation(libs.junit)
     androidTestImplementation(platform(libs.androidx.compose.bom))

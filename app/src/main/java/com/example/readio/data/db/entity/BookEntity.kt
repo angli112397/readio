@@ -4,6 +4,7 @@ import androidx.room.Entity
 import androidx.room.PrimaryKey
 import com.example.readio.domain.model.EpubBook
 import com.example.readio.domain.model.Language
+import com.example.readio.domain.model.TtsProvider
 
 @Entity(tableName = "books")
 data class BookEntity(
@@ -12,7 +13,9 @@ data class BookEntity(
     val author: String?,
     val language: String,
     val coverImagePath: String?,
-    val importedAt: Long
+    val importedAt: Long,
+    val ttsProvider: String? = null,
+    val ttsVoice: String? = null,
 )
 
 fun BookEntity.toDomain(chapters: List<ChapterIndexEntity>): EpubBook = EpubBook(
@@ -22,5 +25,7 @@ fun BookEntity.toDomain(chapters: List<ChapterIndexEntity>): EpubBook = EpubBook
     language = Language.fromTag(language),
     coverImagePath = coverImagePath,
     chapters = chapters.sortedBy { it.indexInBook }.map { it.toDomain() },
-    importedAt = importedAt
+    importedAt = importedAt,
+    ttsProvider = ttsProvider?.let { runCatching { TtsProvider.valueOf(it) }.getOrNull() },
+    ttsVoice = ttsVoice,
 )
