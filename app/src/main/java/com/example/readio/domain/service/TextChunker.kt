@@ -275,7 +275,9 @@ object TextChunker {
                 in OPEN_BRACKETS  -> depth++
                 in CLOSE_BRACKETS -> if (depth > 0) depth--
                 else -> if (depth == 0 && c in COMMA_SET) {
-                    val segment = text.substring(cursor, i).trim()
+                    // Include the delimiter so merged chunks retain original punctuation.
+                    // "A，B" → ["A，", "B"] not ["A", "B"] — chunks stay readable.
+                    val segment = text.substring(cursor, i + 1).trim()
                     if (segment.isNotBlank()) result += segment
                     cursor = i + 1
                 }

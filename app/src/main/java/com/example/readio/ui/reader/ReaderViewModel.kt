@@ -239,21 +239,28 @@ class ReaderViewModel @Inject constructor(
     fun dismissAudioError() = _uiState.update { it.copy(audioError = null) }
 
     fun onTranslateTap() {
-        val state = _uiState.value
-        val chunkText = state.chapter?.chunks?.getOrNull(state.currentChunkIndex)?.text ?: return
+        val state   = _uiState.value
+        val chapter = state.chapter ?: return
 
-        if (state.wordLookup?.word == chunkText && !state.wordLookup.isLoading) {
+        // Build the full logical sentence(s) that overlap with the current chunk.
+        // This expands across chunk boundaries so comma-split fragments that belong to
+        // the same punctuation-sentence are included, giving the engine better context.
+        val contextText = buildTranslationContext(chapter, state.currentChunkIndex)
+        if (contextText.isBlank()) return
+
+        // Second tap on the same content dismisses the card.
+        if (state.wordLookup?.word == contextText && !state.wordLookup.isLoading) {
             dismissWordLookup(); return
         }
 
         lookupJob?.cancel()
-        _uiState.update { it.copy(wordLookup = WordLookup(word = chunkText)) }
+        _uiState.update { it.copy(wordLookup = WordLookup(word = contextText)) }
         lookupJob = viewModelScope.launch {
             val targetCode = readingPrefs.value.translationLanguage.code
             try {
-                val entry = vocabularyRepository.lookup(chunkText, targetCode)
+                val entry = vocabularyRepository.lookup(contextText, targetCode)
                 _uiState.update { s ->
-                    if (s.wordLookup?.word != chunkText) return@update s
+                    if (s.wordLookup?.word != contextText) return@update s
                     s.copy(wordLookup = s.wordLookup.copy(
                         translation = entry?.definitions?.firstOrNull() ?: "—",
                         isLoading = false
@@ -262,11 +269,66 @@ class ReaderViewModel @Inject constructor(
             } catch (e: Exception) {
                 if (e is kotlinx.coroutines.CancellationException) throw e
                 _uiState.update { s ->
-                    if (s.wordLookup?.word != chunkText) return@update s
+                    if (s.wordLookup?.word != contextText) return@update s
                     s.copy(wordLookup = s.wordLookup.copy(isLoading = false, error = e.message))
                 }
             }
         }
+    }
+
+    /**
+     * Assemble the full logical sentence(s) that overlap with [chunkIndex].
+     *
+     * The TextChunker's two-pass algorithm (expand → bin-pack) can split a single
+     * punctuation-sentence across two adjacent chunks when a comma-split fragment
+     * doesn't fit in the current chunk and overflows into the next.
+     *
+     * Strategy: take all sentence-atoms belonging to [chunkIndex], then walk outward
+     * until we reach atoms that end with sentence-terminal punctuation (。！？…!?.)
+     * in both directions, including all atoms in between.
+     *
+     * Example:
+     *   Atom 5 (chunk 1): "因为他很努力，"       ← comma-split, not terminal
+     *   Atom 6 (chunk 2): "所以他终于成功了。"   ← terminal  ← current chunk starts here
+     *   Atom 7 (chunk 2): "下一句话。"
+     *
+     * Translating chunk 2 normally gives only "所以他终于成功了。下一句话。"
+     * With context expansion: atoms 5–7 → "因为他很努力，所以他终于成功了。下一句话。"
+     */
+    private fun buildTranslationContext(chapter: Chapter, chunkIndex: Int): String {
+        val allAtoms = chapter.sentences
+        if (allAtoms.isEmpty()) return chapter.chunks.getOrNull(chunkIndex)?.text ?: ""
+
+        val chunkAtoms = allAtoms.filter { it.chunkIndex == chunkIndex }
+        if (chunkAtoms.isEmpty()) return chapter.chunks.getOrNull(chunkIndex)?.text ?: ""
+
+        val firstIdx = chunkAtoms.first().indexInChapter
+        val lastIdx  = chunkAtoms.last().indexInChapter
+
+        // Walk backward: include atoms that form the beginning of the current sentence.
+        // Stop when the atom before [start] already terminates a sentence (or at index 0).
+        var start = firstIdx
+        while (start > 0 && !isSentenceTerminal(allAtoms[start - 1].text)) {
+            start--
+        }
+
+        // Walk forward: extend to the end of the current sentence.
+        // Stop when the atom at [end] itself terminates a sentence (or at last index).
+        var end = lastIdx
+        while (end < allAtoms.lastIndex && !isSentenceTerminal(allAtoms[end].text)) {
+            end++
+        }
+
+        return allAtoms.subList(start, end + 1).joinToString("") { it.text }
+    }
+
+    /**
+     * True if [text] ends with a sentence-terminal punctuation mark.
+     * Used by [buildTranslationContext] to detect logical sentence boundaries.
+     */
+    private fun isSentenceTerminal(text: String): Boolean {
+        val last = text.trimEnd().lastOrNull() ?: return false
+        return last in "。！？…!?."
     }
 
     fun dismissWordLookup() = _uiState.update { it.copy(wordLookup = null) }

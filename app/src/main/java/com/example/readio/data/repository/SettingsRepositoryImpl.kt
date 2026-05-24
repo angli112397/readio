@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.example.readio.domain.model.ReadingPreferences
 import com.example.readio.domain.model.ReadingTheme
 import com.example.readio.domain.model.TranslationLanguage
+import com.example.readio.domain.model.TranslationProvider
 import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.SettingsRepository
@@ -33,13 +34,12 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun saveTtsConfig(config: TtsConfig) {
         dataStore.edit { prefs ->
-            prefs[Keys.PROVIDER]          = config.provider.name
-            prefs[Keys.ANDROID_LOCALE]    = config.androidLocale
-            prefs[Keys.VOLC_APP_ID]       = config.volcAppId
-            prefs[Keys.VOLC_ACCESS_KEY]   = config.volcAccessKey
-            prefs[Keys.VOLC_RESOURCE_ID]  = config.volcResourceId
-            prefs[Keys.VOLC_SPEAKER]      = config.volcSpeaker
-            prefs[Keys.SPEECH_RATE]       = config.speechRate
+            prefs[Keys.PROVIDER]        = config.provider.name
+            prefs[Keys.ANDROID_LOCALE]  = config.androidLocale
+            prefs[Keys.VOLC_APP_ID]     = config.volcAppId
+            prefs[Keys.VOLC_ACCESS_KEY] = config.volcAccessKey
+            prefs[Keys.VOLC_SPEAKER]    = config.volcSpeaker
+            prefs[Keys.SPEECH_RATE]     = config.speechRate
         }
     }
 
@@ -53,26 +53,26 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun saveReadingPreferences(prefs: ReadingPreferences) {
         dataStore.edit { data ->
-            data[Keys.CHUNK_SIZE]           = prefs.chunkSize
-            data[Keys.FONT_SIZE]            = prefs.fontSize
-            data[Keys.LINE_HEIGHT]          = prefs.lineHeightMultiplier
-            data[Keys.READING_THEME]        = prefs.readingTheme.name
-            data[Keys.TRANSLATION_LANGUAGE] = prefs.translationLanguage.name
+            data[Keys.CHUNK_SIZE]             = prefs.chunkSize
+            data[Keys.FONT_SIZE]              = prefs.fontSize
+            data[Keys.LINE_HEIGHT]            = prefs.lineHeightMultiplier
+            data[Keys.READING_THEME]          = prefs.readingTheme.name
+            data[Keys.TRANSLATION_LANGUAGE]   = prefs.translationLanguage.name
+            data[Keys.TRANSLATION_PROVIDER]   = prefs.translationProvider.name
         }
     }
 
     // ── Mapping ─────────────────────────────────────────────────────────────
 
     private fun Preferences.toTtsConfig() = TtsConfig(
-        provider        = this[Keys.PROVIDER]
-                          ?.let { runCatching { TtsProvider.valueOf(it) }.getOrNull() }
-                          ?: TtsProvider.LOCAL_ANDROID,
-        androidLocale   = this[Keys.ANDROID_LOCALE]   ?: "zh-CN",
-        volcAppId       = this[Keys.VOLC_APP_ID]       ?: "",
-        volcAccessKey   = this[Keys.VOLC_ACCESS_KEY]   ?: "",
-        volcResourceId  = this[Keys.VOLC_RESOURCE_ID]  ?: "seed-tts-2.0",
-        volcSpeaker     = this[Keys.VOLC_SPEAKER]      ?: "",
-        speechRate      = this[Keys.SPEECH_RATE]       ?: 1.0f
+        provider      = this[Keys.PROVIDER]
+                        ?.let { runCatching { TtsProvider.valueOf(it) }.getOrNull() }
+                        ?: TtsProvider.LOCAL_ANDROID,
+        androidLocale = this[Keys.ANDROID_LOCALE] ?: "zh-CN",
+        volcAppId     = this[Keys.VOLC_APP_ID]     ?: "",
+        volcAccessKey = this[Keys.VOLC_ACCESS_KEY] ?: "",
+        volcSpeaker   = this[Keys.VOLC_SPEAKER]    ?: "",
+        speechRate    = this[Keys.SPEECH_RATE]     ?: 1.0f
     )
 
     private fun Preferences.toReadingPreferences() = ReadingPreferences(
@@ -84,21 +84,24 @@ class SettingsRepositoryImpl @Inject constructor(
                                ?: ReadingTheme.DEFAULT,
         translationLanguage  = this[Keys.TRANSLATION_LANGUAGE]
                                ?.let { runCatching { TranslationLanguage.valueOf(it) }.getOrNull() }
-                               ?: TranslationLanguage.ZH_CN
+                               ?: TranslationLanguage.ZH_CN,
+        translationProvider  = this[Keys.TRANSLATION_PROVIDER]
+                               ?.let { runCatching { TranslationProvider.valueOf(it) }.getOrNull() }
+                               ?: TranslationProvider.ML_KIT
     )
 
     private object Keys {
-        val PROVIDER          = stringPreferencesKey("tts_provider")
-        val ANDROID_LOCALE    = stringPreferencesKey("tts_android_locale")
-        val VOLC_APP_ID       = stringPreferencesKey("tts_volc_app_id")
-        val VOLC_ACCESS_KEY   = stringPreferencesKey("tts_volc_access_key")
-        val VOLC_RESOURCE_ID  = stringPreferencesKey("tts_volc_resource_id")
-        val VOLC_SPEAKER      = stringPreferencesKey("tts_volc_speaker")
-        val SPEECH_RATE       = floatPreferencesKey("tts_speech_rate")
-        val CHUNK_SIZE        = intPreferencesKey("tts_chunk_size")
-        val FONT_SIZE         = intPreferencesKey("reading_font_size")
-        val LINE_HEIGHT       = floatPreferencesKey("reading_line_height")
-        val READING_THEME         = stringPreferencesKey("reading_theme")
-        val TRANSLATION_LANGUAGE  = stringPreferencesKey("translation_language")
+        val PROVIDER             = stringPreferencesKey("tts_provider")
+        val ANDROID_LOCALE       = stringPreferencesKey("tts_android_locale")
+        val VOLC_APP_ID          = stringPreferencesKey("tts_volc_app_id")
+        val VOLC_ACCESS_KEY      = stringPreferencesKey("tts_volc_access_key")
+        val VOLC_SPEAKER         = stringPreferencesKey("tts_volc_speaker")
+        val SPEECH_RATE          = floatPreferencesKey("tts_speech_rate")
+        val CHUNK_SIZE           = intPreferencesKey("tts_chunk_size")
+        val FONT_SIZE            = intPreferencesKey("reading_font_size")
+        val LINE_HEIGHT          = floatPreferencesKey("reading_line_height")
+        val READING_THEME          = stringPreferencesKey("reading_theme")
+        val TRANSLATION_LANGUAGE   = stringPreferencesKey("translation_language")
+        val TRANSLATION_PROVIDER   = stringPreferencesKey("translation_provider")
     }
 }

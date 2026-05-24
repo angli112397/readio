@@ -11,11 +11,10 @@ data class TtsConfig(
     val provider: TtsProvider = TtsProvider.LOCAL_ANDROID,
     // LOCAL_ANDROID
     val androidLocale: String = "zh-CN",
-    // VOLCENGINE
+    // VOLCENGINE — 精品长文本 v1 API
     val volcAppId: String = "",
-    val volcAccessKey: String = "",
-    val volcResourceId: String = "seed-tts-2.0",
-    val volcSpeaker: String = "",
+    val volcAccessKey: String = "",   // used as Bearer token
+    val volcSpeaker: String = "",     // voice_type, e.g. "BV001_streaming"
     // Common
     val speechRate: Float = 1.0f
 ) {

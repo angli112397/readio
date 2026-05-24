@@ -13,16 +13,16 @@ object TtsVoiceCatalog {
             VoiceOption("en-US", "English (US)"),
         ),
 
-        // 豆包语音合成模型 2.0 音色
-        // 完整列表：https://www.volcengine.com/docs/6561/1257544
+        // 精品长文本语音合成 v1 API 音色（voice_type 格式）
+        // 完整列表：https://www.volcengine.com/docs/6561/1108211
         TtsProvider.VOLCENGINE to listOf(
             VoiceOption(
-                id    = "zh_female_vv_uranus_bigtts",
-                label = "Vivi 2.0 · 女 · 通用（中文）"
+                id    = "BV406_V2_streaming",
+                label = "梓梓 2.0 · 女 · 超自然（中文）"
             ),
             VoiceOption(
-                id    = "en_male_tim_uranus_bigtts",
-                label = "Tim · 男 · 通用（英文）"
+                id    = "BV502_streaming",
+                label = "Amanda · 女 · 讲述（英文）"
             ),
         )
     )

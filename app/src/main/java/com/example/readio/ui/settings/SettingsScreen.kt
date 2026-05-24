@@ -17,6 +17,7 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.readio.domain.model.ReadingTheme
 import com.example.readio.domain.model.TranslationLanguage
+import com.example.readio.domain.model.TranslationProvider
 import com.example.readio.domain.model.TtsProvider
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
@@ -41,24 +42,30 @@ fun SettingsScreen(
     var volcSpeaker by remember(ttsConfig.volcSpeaker) { mutableStateOf(ttsConfig.volcSpeaker) }
     var speechRate by remember(ttsConfig.speechRate) { mutableFloatStateOf(ttsConfig.speechRate) }
 
-    // Reading state
+    // Reading / translation state
     var chunkSize by remember(prefs.chunkSize) { mutableIntStateOf(prefs.chunkSize) }
     var fontSize by remember(prefs.fontSize) { mutableIntStateOf(prefs.fontSize) }
     var lineHeight by remember(prefs.lineHeightMultiplier) { mutableFloatStateOf(prefs.lineHeightMultiplier) }
     var readingTheme by remember(prefs.readingTheme) { mutableStateOf(prefs.readingTheme) }
     var translationLanguage by remember(prefs.translationLanguage) { mutableStateOf(prefs.translationLanguage) }
+    var translationProvider by remember(prefs.translationProvider) { mutableStateOf(prefs.translationProvider) }
 
     // Menu state
     var providerMenuExpanded by remember { mutableStateOf(false) }
+    var translationProviderMenuExpanded by remember { mutableStateOf(false) }
     var translationLangMenuExpanded by remember { mutableStateOf(false) }
     var localeMenuExpanded by remember { mutableStateOf(false) }
     var volcSpeakerMenuExpanded by remember { mutableStateOf(false) }
     var keyVisible by remember { mutableStateOf(false) }
     var showClearAllDialog by remember { mutableStateOf(false) }
 
-    val voices = remember(selectedProvider) {
+    val ttsVoices = remember(selectedProvider) {
         TtsVoiceCatalog.byProvider[selectedProvider] ?: emptyList()
     }
+
+    // Volcengine credentials are shared — show them when either service uses Volcengine.
+    val needsVolcCredentials = selectedProvider == TtsProvider.VOLCENGINE ||
+                               translationProvider == TranslationProvider.VOLCENGINE
 
     if (showClearAllDialog) {
         AlertDialog(
@@ -101,7 +108,7 @@ fun SettingsScreen(
             Text("朗读", style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary)
 
-            // Provider
+            // TTS Provider
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("TTS 模式", style = MaterialTheme.typography.labelLarge)
                 ExposedDropdownMenuBox(
@@ -132,7 +139,7 @@ fun SettingsScreen(
                 }
             }
 
-            // ── LOCAL_ANDROID 设置 ──
+            // LOCAL_ANDROID locale picker
             if (selectedProvider == TtsProvider.LOCAL_ANDROID) {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("语言 / Locale", style = MaterialTheme.typography.labelLarge)
@@ -141,7 +148,7 @@ fun SettingsScreen(
                         onExpandedChange = { localeMenuExpanded = it }
                     ) {
                         OutlinedTextField(
-                            value = voices.find { it.id == androidLocale }?.label ?: androidLocale,
+                            value = ttsVoices.find { it.id == androidLocale }?.label ?: androidLocale,
                             onValueChange = {},
                             readOnly = true,
                             modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
@@ -149,7 +156,7 @@ fun SettingsScreen(
                         )
                         ExposedDropdownMenu(expanded = localeMenuExpanded,
                             onDismissRequest = { localeMenuExpanded = false }) {
-                            voices.forEach { v ->
+                            ttsVoices.forEach { v ->
                                 DropdownMenuItem(
                                     text = { Text(v.label) },
                                     onClick = { androidLocale = v.id; localeMenuExpanded = false }
@@ -160,43 +167,8 @@ fun SettingsScreen(
                 }
             }
 
-            // ── VOLCENGINE 设置 ──
+            // VOLCENGINE voice picker
             if (selectedProvider == TtsProvider.VOLCENGINE) {
-                // App ID
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("App ID", style = MaterialTheme.typography.labelLarge)
-                    OutlinedTextField(
-                        value = volcAppId,
-                        onValueChange = { volcAppId = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("火山引擎控制台 App ID") },
-                        singleLine = true
-                    )
-                }
-
-                // Access Key
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Access Key", style = MaterialTheme.typography.labelLarge)
-                    OutlinedTextField(
-                        value = volcAccessKey,
-                        onValueChange = { volcAccessKey = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Access Token") },
-                        visualTransformation = if (keyVisible) VisualTransformation.None
-                                              else PasswordVisualTransformation(),
-                        trailingIcon = {
-                            IconButton(onClick = { keyVisible = !keyVisible }) {
-                                Icon(
-                                    if (keyVisible) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                                    contentDescription = if (keyVisible) "隐藏" else "显示"
-                                )
-                            }
-                        },
-                        singleLine = true
-                    )
-                }
-
-                // Speaker
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text("音色", style = MaterialTheme.typography.labelLarge)
                     ExposedDropdownMenuBox(
@@ -204,7 +176,7 @@ fun SettingsScreen(
                         onExpandedChange = { volcSpeakerMenuExpanded = it }
                     ) {
                         OutlinedTextField(
-                            value = voices.find { it.id == volcSpeaker }?.label ?: volcSpeaker,
+                            value = ttsVoices.find { it.id == volcSpeaker }?.label ?: volcSpeaker,
                             onValueChange = {},
                             readOnly = true,
                             modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
@@ -212,7 +184,7 @@ fun SettingsScreen(
                         )
                         ExposedDropdownMenu(expanded = volcSpeakerMenuExpanded,
                             onDismissRequest = { volcSpeakerMenuExpanded = false }) {
-                            voices.forEach { v ->
+                            ttsVoices.forEach { v ->
                                 DropdownMenuItem(
                                     text = { Text(v.label) },
                                     onClick = { volcSpeaker = v.id; volcSpeakerMenuExpanded = false }
@@ -223,7 +195,7 @@ fun SettingsScreen(
                 }
             }
 
-            // Speed (common)
+            // Playback speed
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("播放速度 — ${"%.2f".format(speechRate)}×", style = MaterialTheme.typography.labelLarge)
                 Slider(
@@ -233,12 +205,48 @@ fun SettingsScreen(
                     steps = 5
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("0.5×", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("2.0×", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("0.5×", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("2.0×", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
-            // Translation language
+            HorizontalDivider()
+
+            // ════════ 翻译设置 ════════════════════════════════════════════════
+            Text("翻译", style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.primary)
+
+            // Translation provider
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("翻译引擎", style = MaterialTheme.typography.labelLarge)
+                ExposedDropdownMenuBox(
+                    expanded = translationProviderMenuExpanded,
+                    onExpandedChange = { translationProviderMenuExpanded = it }
+                ) {
+                    OutlinedTextField(
+                        value = translationProvider.displayName,
+                        onValueChange = {},
+                        readOnly = true,
+                        modifier = Modifier.menuAnchor(MenuAnchorType.PrimaryNotEditable).fillMaxWidth(),
+                        trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = translationProviderMenuExpanded) }
+                    )
+                    ExposedDropdownMenu(
+                        expanded = translationProviderMenuExpanded,
+                        onDismissRequest = { translationProviderMenuExpanded = false }
+                    ) {
+                        TranslationProvider.entries.forEach { tp ->
+                            DropdownMenuItem(
+                                text = { Text(tp.displayName) },
+                                onClick = { translationProvider = tp; translationProviderMenuExpanded = false }
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Translation target language
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("翻译目标语言", style = MaterialTheme.typography.labelLarge)
                 ExposedDropdownMenuBox(
@@ -266,6 +274,56 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // ════════ 火山引擎凭据 ════════════════════════════════════════════
+            // Shown when either TTS or translation uses Volcengine.
+            if (needsVolcCredentials) {
+                Text("火山引擎", style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary)
+
+                Text(
+                    "App ID 和 Access Key 在朗读与翻译服务间共用，配置一次即可。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+
+                // App ID
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("App ID", style = MaterialTheme.typography.labelLarge)
+                    OutlinedTextField(
+                        value = volcAppId,
+                        onValueChange = { volcAppId = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("火山引擎控制台 App ID") },
+                        singleLine = true
+                    )
+                }
+
+                // Access Key
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Access Key", style = MaterialTheme.typography.labelLarge)
+                    OutlinedTextField(
+                        value = volcAccessKey,
+                        onValueChange = { volcAccessKey = it },
+                        modifier = Modifier.fillMaxWidth(),
+                        placeholder = { Text("Access Token") },
+                        visualTransformation = if (keyVisible) VisualTransformation.None
+                                              else PasswordVisualTransformation(),
+                        trailingIcon = {
+                            IconButton(onClick = { keyVisible = !keyVisible }) {
+                                Icon(
+                                    if (keyVisible) Icons.Default.VisibilityOff
+                                    else Icons.Default.Visibility,
+                                    contentDescription = if (keyVisible) "隐藏" else "显示"
+                                )
+                            }
+                        },
+                        singleLine = true
+                    )
+                }
+            }
+
+            HorizontalDivider()
+
             // ════════ 阅读显示 ════════════════════════════════════════════════
             Text("阅读显示", style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary)
@@ -280,8 +338,10 @@ fun SettingsScreen(
                     steps = 4
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("50", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("300", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("50", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("300", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -295,8 +355,10 @@ fun SettingsScreen(
                     steps = 11
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("小", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("大", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("小", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("大", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -310,8 +372,10 @@ fun SettingsScreen(
                     steps = 9
                 )
                 Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("紧凑", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("宽松", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("紧凑", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("宽松", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
 
@@ -337,7 +401,7 @@ fun SettingsScreen(
                                 selectedProvider, androidLocale,
                                 volcAppId, volcAccessKey, volcSpeaker,
                                 speechRate, chunkSize, fontSize, lineHeight,
-                                readingTheme, translationLanguage
+                                readingTheme, translationLanguage, translationProvider
                             )
                             onBack()
                         } catch (e: Exception) {
@@ -350,7 +414,7 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
-            // ════════ 存储（仅火山引擎模式下有意义）════════════════════════
+            // ════════ 存储（仅火山引擎 TTS 模式下有意义）════════════════════
             if (selectedProvider == TtsProvider.VOLCENGINE) {
                 Text("存储", style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary)
@@ -359,9 +423,11 @@ fun SettingsScreen(
                     onClick = { showClearAllDialog = true },
                     enabled = !clearingAudio,
                     modifier = Modifier.fillMaxWidth(),
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+                    colors = ButtonDefaults.outlinedButtonColors(
+                        contentColor = MaterialTheme.colorScheme.error)
                 ) {
-                    if (clearingAudio) CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                    if (clearingAudio) CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
                     else Text("清除所有音频缓存")
                 }
             }

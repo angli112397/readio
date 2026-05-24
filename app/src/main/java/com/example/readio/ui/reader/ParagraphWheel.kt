@@ -122,9 +122,13 @@ fun ChunkWheel(
     }
 
     // Notify caller only when scroll settles (false → true transition is ignored).
+    // .drop(1) skips the initial `false` emission that Compose fires synchronously on
+    // first collection — without it, onCenterChanged(0) would be called on every
+    // composition before the user has touched the wheel.
     LaunchedEffect(listState) {
         snapshotFlow { listState.isScrollInProgress }
             .distinctUntilChanged()
+            .drop(1)
             .collect { isScrolling -> if (!isScrolling) onCenterChanged(liveCenterIndex) }
     }
 

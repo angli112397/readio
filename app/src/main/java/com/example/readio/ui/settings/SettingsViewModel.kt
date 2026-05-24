@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import com.example.readio.domain.model.ReadingPreferences
 import com.example.readio.domain.model.ReadingTheme
 import com.example.readio.domain.model.TranslationLanguage
+import com.example.readio.domain.model.TranslationProvider
 import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.AudioRepository
@@ -43,14 +44,15 @@ class SettingsViewModel @Inject constructor(
         fontSize: Int,
         lineHeightMultiplier: Float,
         readingTheme: ReadingTheme,
-        translationLanguage: TranslationLanguage
+        translationLanguage: TranslationLanguage,
+        translationProvider: TranslationProvider
     ) {
         settingsRepository.saveTtsConfig(
-            // volcResourceId is hardcoded — only seed-tts-2.0 is supported.
-            TtsConfig(provider, androidLocale, volcAppId, volcAccessKey, "seed-tts-2.0", volcSpeaker, speechRate)
+            TtsConfig(provider, androidLocale, volcAppId, volcAccessKey, volcSpeaker, speechRate)
         )
         settingsRepository.saveReadingPreferences(
-            ReadingPreferences(chunkSize, fontSize, lineHeightMultiplier, readingTheme, translationLanguage)
+            ReadingPreferences(chunkSize, fontSize, lineHeightMultiplier, readingTheme,
+                translationLanguage, translationProvider)
         )
     }
 
