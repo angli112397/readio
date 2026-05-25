@@ -215,6 +215,17 @@ private fun ChapterItem(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
+            // Show error message inline so it's readable without logcat
+            val errorMsg = (item.audioStatus as? ChapterAudioStatus.Error)?.message
+            if (!errorMsg.isNullOrBlank()) {
+                Text(
+                    text  = errorMsg,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
 
         if (showAudioControls) {
@@ -227,11 +238,11 @@ private fun ChapterItem(
                 }
 
                 is ChapterAudioStatus.HasTaskId -> {
-                    // Task was submitted in a previous session; resume polling by calling download.
+                    // Task submitted; user taps to query status once and download if ready.
                     IconButton(onClick = onDownload, modifier = Modifier.size(40.dp)) {
                         Icon(
                             Icons.Default.HourglassEmpty,
-                            contentDescription = "任务已提交，点击继续下载",
+                            contentDescription = "合成中，点击查询结果",
                             tint = MaterialTheme.colorScheme.primary
                         )
                     }
@@ -239,11 +250,16 @@ private fun ChapterItem(
 
                 is ChapterAudioStatus.Downloading -> {
                     Box(Modifier.size(40.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(
-                            progress  = { status.progress },
-                            modifier  = Modifier.size(24.dp),
-                            strokeWidth = 2.5.dp
-                        )
+                        if (status.progress < 0f) {
+                            // Indeterminate — server is still synthesising or we're mid-query
+                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.5.dp)
+                        } else {
+                            CircularProgressIndicator(
+                                progress    = { status.progress },
+                                modifier    = Modifier.size(24.dp),
+                                strokeWidth = 2.5.dp
+                            )
+                        }
                     }
                 }
 

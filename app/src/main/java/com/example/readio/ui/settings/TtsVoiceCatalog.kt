@@ -4,15 +4,21 @@ import com.example.readio.domain.model.TtsProvider
 
 data class VoiceOption(val id: String, val label: String)
 
-/** A flattened (provider, voice) pair used in the per-book TTS picker. */
+/**
+ * A flattened (provider, voice) pair used in the per-book TTS picker.
+ *
+ * [voiceId] = "" for VOLCENGINE and FISH_SPEECH means "use the global voice / server from TtsConfig".
+ * applyBookOverride treats empty voiceId as "don't override the global voice".
+ */
 data class TtsChoice(
     val provider: TtsProvider,
-    val voiceId: String,   // androidLocale for LOCAL_ANDROID, volcSpeaker for VOLCENGINE, "auto" for SHERPA
+    val voiceId: String,
     val label: String,
 )
 
 object TtsVoiceCatalog {
 
+    /** Per-provider voice options shown in the settings 火山引擎 section. */
     val byProvider: Map<TtsProvider, List<VoiceOption>> = mapOf(
 
         TtsProvider.LOCAL_ANDROID to listOf(
@@ -20,38 +26,41 @@ object TtsVoiceCatalog {
             VoiceOption("en-US", "English (US)"),
         ),
 
-        // Sherpa-ONNX: single VITS model slot, no language routing.
-        TtsProvider.LOCAL_SHERPA_ONNX to listOf(
-            VoiceOption("auto", "本地 VITS 模型"),
-        ),
-
-        // 精品长文本语音合成 v1 API 音色（voice_type 格式）
-        // 完整列表：https://www.volcengine.com/docs/6561/1108211
+        // 精品长文本语音合成 v1 API 音色
         TtsProvider.VOLCENGINE to listOf(
-            VoiceOption(
-                id    = "BV406_V2_streaming",
-                label = "梓梓 2.0 · 女 · 超自然（中文）"
-            ),
-            VoiceOption(
-                id    = "BV502_streaming",
-                label = "Amanda · 女 · 讲述（英文）"
-            ),
+            VoiceOption("BV406_V2_streaming", "梓梓 2.0 · 女 · 超自然（中文）"),
+            VoiceOption("BV502_streaming",    "Amanda · 女 · 讲述（英文）"),
         )
     )
 
     fun defaultVoice(provider: TtsProvider): String =
         byProvider[provider]?.firstOrNull()?.id ?: ""
 
-    /** Flat list for the per-book TTS picker dialog. */
+    /**
+     * Flat list for the per-book TTS picker.
+     *
+     * Per-book selection is about choosing an engine, not a specific voice.
+     * The VOLCENGINE and FISH_SPEECH entries use voiceId="" so applyBookOverride
+     * falls back to the global speaker / server URL — determined by global settings.
+     */
     val allChoices: List<TtsChoice> = listOf(
-        TtsChoice(TtsProvider.LOCAL_ANDROID,     "zh-CN",                "系统 TTS · 普通话"),
-        TtsChoice(TtsProvider.LOCAL_ANDROID,     "en-US",                "系统 TTS · English"),
-        TtsChoice(TtsProvider.LOCAL_SHERPA_ONNX, "auto",                 "本地神经网络 · VITS"),
-        TtsChoice(TtsProvider.VOLCENGINE,        "BV406_V2_streaming",   "火山引擎 · 梓梓 2.0"),
-        TtsChoice(TtsProvider.VOLCENGINE,        "BV502_streaming",      "火山引擎 · Amanda"),
+        TtsChoice(TtsProvider.LOCAL_ANDROID, "zh-CN", "系统 TTS · 普通话"),
+        TtsChoice(TtsProvider.LOCAL_ANDROID, "en-US", "系统 TTS · English"),
+        TtsChoice(TtsProvider.VOLCENGINE,    "",      "火山引擎（云端）"),
+        TtsChoice(TtsProvider.FISH_SPEECH,   "",      "Fish Speech（本地推理）"),
     )
 
-    fun findChoice(provider: TtsProvider?, voiceId: String?): TtsChoice? =
-        if (provider == null) null
-        else allChoices.firstOrNull { it.provider == provider && it.voiceId == voiceId }
+    /**
+     * Find the choice matching [provider] + [voiceId].
+     * Any non-null VOLCENGINE or FISH_SPEECH provider maps to their single entry
+     * regardless of voiceId, since the picker no longer differentiates voices.
+     */
+    fun findChoice(provider: TtsProvider?, voiceId: String?): TtsChoice? {
+        if (provider == null) return null
+        return when (provider) {
+            TtsProvider.VOLCENGINE  -> allChoices.first { it.provider == TtsProvider.VOLCENGINE }
+            TtsProvider.FISH_SPEECH -> allChoices.first { it.provider == TtsProvider.FISH_SPEECH }
+            else -> allChoices.firstOrNull { it.provider == provider && it.voiceId == voiceId }
+        }
+    }
 }

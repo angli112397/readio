@@ -24,31 +24,25 @@ import java.util.UUID
 import javax.inject.Inject
 import javax.inject.Singleton
 
-private const val TAG = "VolcengineEngine"
+private const val TAG = "FishSpeechEngine"
 
-// Volcengine 精品长文本语音合成 v1 API (cloud only)
-// 文档: https://www.volcengine.com/docs/6561/1108211
-private const val CLOUD_BASE     = "https://openspeech.bytedance.com"
-private const val CLOUD_RESOURCE = "volc.tts_async.default"
-private const val SUBMIT_URL     = "$CLOUD_BASE/api/v1/tts_async/submit"
-
+/**
+ * Fish Speech local GPU inference server.
+ *
+ * Implements the same Volcengine-compatible async TTS API used by the local server:
+ *   1. Submit sentences array → receive task_id.
+ *   2. Query task status once; if not ready, persist task_id and let user retry.
+ *   3. Download WAV audio + parse sentence timings.
+ *
+ * No authentication headers — the local server is assumed to be trusted (LAN).
+ */
 @Singleton
-class VolcengineEngine @Inject constructor(
+class FishSpeechEngine @Inject constructor(
     private val audioCache: AudioCache
 ) : BatchTtsEngine {
 
-    override val provider: TtsProvider = TtsProvider.VOLCENGINE
+    override val provider: TtsProvider = TtsProvider.FISH_SPEECH
 
-    // ── BatchTtsEngine: synthesize ────────────────────────────────────────────
-
-    /**
-     * Full cloud synthesis flow:
-     *   1. Concatenate cleaned sentence texts → submit as `text` blob to Volcengine cloud.
-     *   2. Map returned sentences back to display chunks via text search.
-     *   3. Query once — if complete download MP3; if still processing persist task ID.
-     *
-     * Task ID is persisted to [cacheDir]/task.id immediately after submit for crash recovery.
-     */
     override fun synthesize(
         sentences: List<Sentence>,
         config: TtsConfig,
@@ -64,9 +58,15 @@ class VolcengineEngine @Inject constructor(
             return@flow
         }
 
-        // Build prepared text for cloud submission + timing mapping.
-        val prepared = buildPreparedText(sentences)
-        if (prepared.text.isBlank()) {
+        val baseUrl = config.fishSpeechUrl.trimEnd('/')
+        if (baseUrl.isEmpty()) {
+            emit(BatchSynthesisEvent.Failed(IOException("Fish Speech 服务器地址未配置，请在设置中填写服务器地址。")))
+            return@flow
+        }
+
+        // Filter blank-after-cleaning sentences; server gets the rest in order.
+        val validSentences = sentences.filter { cleanForTts(it.text).isNotBlank() }
+        if (validSentences.isEmpty()) {
             emit(BatchSynthesisEvent.Failed(IOException("Chapter text is empty after cleaning")))
             return@flow
         }
@@ -75,36 +75,32 @@ class VolcengineEngine @Inject constructor(
 
         val taskId = loadTaskId(cacheDir) ?: run {
             emit(BatchSynthesisEvent.Progress(0, sentences.size, "提交合成任务…"))
-            val id = submitCloud(prepared.text, config)
+            val id = submit(validSentences, baseUrl)
             saveTaskId(cacheDir, id)
-            Log.d(TAG, "Submitted cloud task $id")
+            Log.d(TAG, "Submitted task $id to $baseUrl")
             id
         }
 
-        // ── Single query — download if ready, otherwise hand control back to user ──
-        //
-        // No automatic polling: the user taps the chapter item again to re-trigger
-        // this flow, which calls queryOnce once more.
+        // ── Single query — download if ready, otherwise hand back to user ─────
 
         emit(BatchSynthesisEvent.Progress(0, sentences.size, "查询任务状态…"))
-        val result = queryOnce(taskId, config)
+        val result = queryOnce(taskId, baseUrl)
         if (result != null) {
             emit(BatchSynthesisEvent.Progress(0, sentences.size, "下载音频…"))
-            val audioFile = File(cacheDir, "audio.mp3")
+            val audioFile = File(cacheDir, "audio.wav")
             downloadUrl(result.audioUrl, audioFile)
 
-            val timings = mapCloudTimings(result.sentences, prepared)
+            val timings = mapTimings(result.sentenceResults, validSentences)
             audioCache.writeManifest(cacheDir, SynthesisManifest(
                 format        = AudioFormat.SINGLE_FILE,
-                audioFileName = "audio.mp3",
+                audioFileName = "audio.wav",
                 sentenceCount = timings.size,
                 timings       = timings
             ))
             clearTaskId(cacheDir)
-            Log.d(TAG, "Synthesis complete: ${timings.size} sentences, file=audio.mp3")
+            Log.d(TAG, "Synthesis complete: ${timings.size} sentences, file=audio.wav")
             emit(BatchSynthesisEvent.Complete)
         } else {
-            // Server still synthesising — task ID is on disk, user can check again later.
             Log.d(TAG, "Task $taskId not ready yet, returning to HasTaskId state")
             emit(BatchSynthesisEvent.Submitted(taskId))
         }
@@ -150,114 +146,79 @@ class VolcengineEngine @Inject constructor(
         File(cacheDir, "task.id").delete()
     }
 
-    // ── Submit: cloud mode ────────────────────────────────────────────────────
+    // ── Submit ────────────────────────────────────────────────────────────────
 
-    /**
-     * Submits a single concatenated text blob to Volcengine cloud.
-     * Requires [TtsConfig.volcSpeaker] and cloud credentials.
-     */
-    private fun submitCloud(text: String, config: TtsConfig): String {
+    private fun submit(sentences: List<Sentence>, baseUrl: String): String {
+        val cleanedTexts = JSONArray(sentences.map { cleanForTts(it.text) })
         val payload = JSONObject().apply {
-            put("appid",           config.volcAppId)
             put("reqid",           UUID.randomUUID().toString())
-            put("text",            text)
-            put("format",          "mp3")
-            put("voice_type",      config.volcSpeaker)
+            put("sentences",       cleanedTexts)
+            put("format",          "wav")
             put("enable_subtitle", 1)
         }
-        val resp = httpPost(SUBMIT_URL, payload, config)
+        val resp = httpPost("$baseUrl/api/v1/tts_async/submit", payload)
         val code = resp.optInt("code", 0)
-        if (code != 0) throw IOException("Volcengine submit failed (code=$code): ${resp.optString("message")}")
+        if (code != 0)
+            throw IOException("Fish Speech submit failed (code=$code): ${resp.optString("message")}")
         return resp.getString("task_id")
     }
 
     // ── Query ─────────────────────────────────────────────────────────────────
 
-    /**
-     * Single poll. Returns null if still processing (status=0).
-     * Throws [IOException] on permanent failure (status=2) or API error.
-     */
-    private fun queryOnce(taskId: String, config: TtsConfig): QueryResult? {
-        val url  = "$CLOUD_BASE/api/v1/tts_async/query?appid=${config.volcAppId}&task_id=$taskId"
-        val resp = httpGet(url, config)
+    private fun queryOnce(taskId: String, baseUrl: String): QueryResult? {
+        val url  = "$baseUrl/api/v1/tts_async/query?task_id=$taskId"
+        val resp = httpGet(url)
 
         val errorCode = resp.optInt("code", 0)
         if (errorCode != 0)
-            throw IOException("TTS query error (code=$errorCode): ${resp.optString("message")}")
+            throw IOException("Fish Speech query error (code=$errorCode): ${resp.optString("message")}")
 
         val status = resp.getInt("task_status")
         Log.d(TAG, "Query task=$taskId status=$status")
 
         return when (status) {
             1 -> {
-                val arr       = resp.optJSONArray("sentences")
-                val sentences = arr?.let { a ->
+                val arr = resp.optJSONArray("sentences")
+                val sents = arr?.let { a ->
                     List(a.length()) { j ->
                         val s = a.getJSONObject(j)
-                        VolcSentence(
-                            text    = s.getString("text"),
+                        FishSentence(
+                            text    = s.optString("text", ""),
                             startMs = s.getLong("begin_time"),
                             endMs   = s.getLong("end_time")
                         )
                     }
                 } ?: emptyList()
-                QueryResult(resp.getString("audio_url"), sentences)
+                QueryResult(resp.getString("audio_url"), sents)
             }
-            2    -> throw IOException("TTS synthesis failed for task $taskId (status=2)")
+            2    -> throw IOException("Fish Speech synthesis failed for task $taskId (status=2)")
             else -> null   // 0 = processing
         }
     }
 
-    // ── Timing mapping: cloud mode ────────────────────────────────────────────
+    // ── Timing mapping ────────────────────────────────────────────────────────
 
     /**
-     * Maps Volcengine cloud sentence boundaries to [SentenceTiming] via text search.
-     *
-     * The cloud API does its own NLP segmentation which may differ from TextChunker's.
-     * [PreparedText.charToChunk] gives O(1) chunk lookup by character position in the
-     * concatenated text, bridging the two segmentation schemes.
+     * Maps server sentence results to [SentenceTiming] by index.
+     * The server preserves input order exactly, so [apiSentences][i] → [sentences][i].
      */
-    private fun mapCloudTimings(
-        apiSentences: List<VolcSentence>,
-        prepared: PreparedText
-    ): List<SentenceTiming> {
-        val fullText    = prepared.text
-        val charToChunk = prepared.charToChunk
-        var cursor      = 0
-        return apiSentences.mapIndexed { idx, vs ->
-            val trimmed  = vs.text.trim()
-            val found    = fullText.indexOf(trimmed, cursor).takeIf { it >= 0 }
-                        ?: fullText.indexOf(trimmed).takeIf { it >= 0 }
-            val charPos  = if (found != null) { cursor = found + trimmed.length; found } else cursor
-            val chunkIdx = charToChunk.getOrElse(charPos) { charToChunk.lastOrNull() ?: 0 }
-            SentenceTiming(idx, vs.startMs, vs.endMs, chunkIdx)
+    private fun mapTimings(
+        apiSentences: List<FishSentence>,
+        sentences: List<Sentence>
+    ): List<SentenceTiming> =
+        apiSentences.mapIndexed { i, fs ->
+            val chunkIdx = sentences.getOrNull(i)?.chunkIndex
+                ?: sentences.lastOrNull()?.chunkIndex ?: 0
+            SentenceTiming(i, fs.startMs, fs.endMs, chunkIdx)
         }
-    }
-
-    // ── Text preparation ──────────────────────────────────────────────────────
-
-    private data class PreparedText(val text: String, val charToChunk: IntArray)
-
-    private fun buildPreparedText(sentences: List<Sentence>): PreparedText {
-        val sb          = StringBuilder()
-        val charToChunk = ArrayList<Int>()
-        sentences.forEach { sentence ->
-            val cleaned = cleanForTts(sentence.text)
-            sb.append(cleaned)
-            repeat(cleaned.length) { charToChunk.add(sentence.chunkIndex) }
-        }
-        return PreparedText(sb.toString(), charToChunk.toIntArray())
-    }
 
     // ── HTTP helpers ──────────────────────────────────────────────────────────
 
-    private fun httpPost(url: String, payload: JSONObject, config: TtsConfig): JSONObject {
+    private fun httpPost(url: String, payload: JSONObject): JSONObject {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
-            conn.setRequestProperty("Resource-Id",   CLOUD_RESOURCE)
-            conn.setRequestProperty("Authorization", "Bearer; ${config.volcAccessKey}")
             conn.doOutput = true
             conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
             return readJsonResponse(conn)
@@ -266,12 +227,10 @@ class VolcengineEngine @Inject constructor(
         }
     }
 
-    private fun httpGet(url: String, config: TtsConfig): JSONObject {
+    private fun httpGet(url: String): JSONObject {
         val conn = URL(url).openConnection() as HttpURLConnection
         try {
             conn.requestMethod = "GET"
-            conn.setRequestProperty("Resource-Id",   CLOUD_RESOURCE)
-            conn.setRequestProperty("Authorization", "Bearer; ${config.volcAccessKey}")
             return readJsonResponse(conn)
         } finally {
             conn.disconnect()
@@ -282,7 +241,7 @@ class VolcengineEngine @Inject constructor(
         val code = conn.responseCode
         val body = (if (code in 200..299) conn.inputStream else conn.errorStream ?: conn.inputStream)
             .use { it.readBytes() }.toString(Charsets.UTF_8)
-        if (code !in 200..299) throw IOException("TTS HTTP $code: $body")
+        if (code !in 200..299) throw IOException("Fish Speech HTTP $code: $body")
         return JSONObject(body)
     }
 
@@ -301,6 +260,6 @@ class VolcengineEngine @Inject constructor(
 
     // ── Internal data types ───────────────────────────────────────────────────
 
-    private data class QueryResult(val audioUrl: String, val sentences: List<VolcSentence>)
-    private data class VolcSentence(val text: String, val startMs: Long, val endMs: Long)
+    private data class QueryResult(val audioUrl: String, val sentenceResults: List<FishSentence>)
+    private data class FishSentence(val text: String, val startMs: Long, val endMs: Long)
 }

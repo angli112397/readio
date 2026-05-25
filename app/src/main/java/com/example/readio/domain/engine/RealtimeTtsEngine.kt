@@ -14,11 +14,10 @@ import com.example.readio.domain.model.TtsProvider
  *   OUT: ByteArray (WAV)
  *
  * Current implementations:
- *   - [AndroidTtsEngine]    → [TtsProvider.LOCAL_ANDROID]      (system TTS)
- *   - [SherpaOnnxTtsEngine] → [TtsProvider.LOCAL_SHERPA_ONNX]  (neural TTS, offline)
+ *   - [AndroidTtsEngine] → [TtsProvider.LOCAL_ANDROID] (system TTS)
  *
  * Adding a new realtime engine:
- *   1. Implement this interface (in data/audio/realtime/).
+ *   1. Implement this interface (in data/audio/).
  *   2. Add `@Binds @Singleton @IntoSet` in [TtsEngineModule].
  */
 interface RealtimeTtsEngine {

@@ -67,6 +67,7 @@ class AudioCacheImpl @Inject constructor(
             put("version",       m.version)
             put("format",        m.format.name)
             put("sentenceCount", m.sentenceCount)
+            put("audioFileName", m.audioFileName)
             put("timings",       timingsArr)
         }.toString()
     }
@@ -89,7 +90,8 @@ class AudioCacheImpl @Inject constructor(
             version       = obj.optInt("version", 1),
             format        = format,
             sentenceCount = count,
-            timings       = timings
+            timings       = timings,
+            audioFileName = obj.optString("audioFileName", "audio.mp3")
         )
     }.getOrNull()
 

@@ -62,8 +62,6 @@ data class ReaderUiState(
     val chapterTitle: String = "",
     val chapter: Chapter? = null,
     val currentChunkIndex: Int = 0,
-    val hasPrevChapter: Boolean = false,
-    val hasNextChapter: Boolean = false,
     val isLoading: Boolean = true,
     val error: String? = null,
     val isPlaying: Boolean = false,
@@ -71,8 +69,6 @@ data class ReaderUiState(
     val audioProgress: Float = 0f,
     val audioError: String? = null,
     val wordLookup: WordLookup? = null,
-    /** Current TTS playback speed — mirrored from TtsConfig for PlayerBar display. */
-    val speechRate: Float = 1.0f
 )
 
 @HiltViewModel
@@ -108,7 +104,7 @@ class ReaderViewModel @Inject constructor(
     private var audioJob: Job? = null
     private var prefetchJob: Job? = null
     private var lookupJob: Job? = null
-    /** Polls ExoPlayer position every 150 ms to drive chunk sync for SingleFile (Volcengine). */
+    /** Polls ExoPlayer position every 150 ms to drive chunk sync for SingleFile (batch TTS). */
     private var positionTrackJob: Job? = null
 
     /** Current resolved audio — holds sentenceToChunk for sync regardless of AudioSource type. */
@@ -175,11 +171,9 @@ class ReaderViewModel @Inject constructor(
             _player = connectToService()
             _player.addListener(playerListener)
 
+            // Apply speech rate from settings to ExoPlayer (no UI mirror needed — rate lives in settings).
             settingsRepository.observeTtsConfig()
-                .onEach { config ->
-                    _player.setPlaybackSpeed(config.speechRate)
-                    _uiState.update { it.copy(speechRate = config.speechRate) }
-                }
+                .onEach { config -> _player.setPlaybackSpeed(config.speechRate) }
                 .launchIn(viewModelScope)
 
             // Discard stale audio when provider or voice changes (cacheKey encodes both).
@@ -258,8 +252,6 @@ class ReaderViewModel @Inject constructor(
         val chapter = state.chapter ?: return
 
         // Build the full logical sentence(s) that overlap with the current chunk.
-        // This expands across chunk boundaries so comma-split fragments that belong to
-        // the same punctuation-sentence are included, giving the engine better context.
         val contextText = buildTranslationContext(chapter, state.currentChunkIndex)
         if (contextText.isBlank()) return
 
@@ -301,14 +293,6 @@ class ReaderViewModel @Inject constructor(
      * Strategy: take all sentence-atoms belonging to [chunkIndex], then walk outward
      * until we reach atoms that end with sentence-terminal punctuation (。！？…!?.)
      * in both directions, including all atoms in between.
-     *
-     * Example:
-     *   Atom 5 (chunk 1): "因为他很努力，"       ← comma-split, not terminal
-     *   Atom 6 (chunk 2): "所以他终于成功了。"   ← terminal  ← current chunk starts here
-     *   Atom 7 (chunk 2): "下一句话。"
-     *
-     * Translating chunk 2 normally gives only "所以他终于成功了。下一句话。"
-     * With context expansion: atoms 5–7 → "因为他很努力，所以他终于成功了。下一句话。"
      */
     private fun buildTranslationContext(chapter: Chapter, chunkIndex: Int): String {
         val allAtoms = chapter.sentences
@@ -320,15 +304,11 @@ class ReaderViewModel @Inject constructor(
         val firstIdx = chunkAtoms.first().indexInChapter
         val lastIdx  = chunkAtoms.last().indexInChapter
 
-        // Walk backward: include atoms that form the beginning of the current sentence.
-        // Stop when the atom before [start] already terminates a sentence (or at index 0).
         var start = firstIdx
         while (start > 0 && !isSentenceTerminal(allAtoms[start - 1].text)) {
             start--
         }
 
-        // Walk forward: extend to the end of the current sentence.
-        // Stop when the atom at [end] itself terminates a sentence (or at last index).
         var end = lastIdx
         while (end < allAtoms.lastIndex && !isSentenceTerminal(allAtoms[end].text)) {
             end++
@@ -337,35 +317,12 @@ class ReaderViewModel @Inject constructor(
         return allAtoms.subList(start, end + 1).joinToString("") { it.text }
     }
 
-    /**
-     * True if [text] ends with a sentence-terminal punctuation mark.
-     * Used by [buildTranslationContext] to detect logical sentence boundaries.
-     */
     private fun isSentenceTerminal(text: String): Boolean {
         val last = text.trimEnd().lastOrNull() ?: return false
         return last in "。！？…!?."
     }
 
     fun dismissWordLookup() = _uiState.update { it.copy(wordLookup = null) }
-
-    /**
-     * Cycle to the next preset playback speed.
-     * Presets: 0.75 → 1.0 → 1.25 → 1.5 → 2.0 → (wrap) 0.75
-     * The existing TtsConfig observer applies the change to ExoPlayer automatically.
-     */
-    fun onSpeechRateStep() {
-        viewModelScope.launch {
-            val config = settingsRepository.getTtsConfig()
-            val steps = listOf(0.75f, 1.0f, 1.25f, 1.5f, 2.0f)
-            val currentIdx = steps.indexOfFirst { it >= config.speechRate - 0.01f }
-                .takeIf { it >= 0 } ?: 0
-            val nextRate = steps[(currentIdx + 1) % steps.size]
-            settingsRepository.saveTtsConfig(config.copy(speechRate = nextRate))
-        }
-    }
-
-    fun navigatePrevChapter() = navigateRelative(-1)
-    fun navigateNextChapter() = navigateRelative(+1)
 
     // ── Private ───────────────────────────────────────────────────────────────
 
@@ -392,15 +349,11 @@ class ReaderViewModel @Inject constructor(
         // fallback in playlistIndexToChunk() before currentAudio is resolved.
         currentSentenceToChunk = computeSentenceToChunk(chapter)
 
-        // Realtime TTS: synthesis starts at the current chunk's first true sentence.
-        // Batch TTS (Volcengine / SingleFile): startChunkIndex is forwarded but not used.
         val startChunkIndex = _uiState.value.currentChunkIndex
-        // First true sentence at or after the starting chunk (may skip a cross-chunk tail).
         val startTrueSentenceIdx = currentSentenceToChunk
             .indexOfFirst { it >= startChunkIndex }
             .let { if (it < 0) (currentSentenceToChunk.size - 1).coerceAtLeast(0) else it }
 
-        // Show progress immediately — don't wait for the first Generating event.
         _uiState.update { it.copy(audioGenerating = true, audioProgress = 0f) }
 
         audioJob?.cancel()
@@ -409,15 +362,12 @@ class ReaderViewModel @Inject constructor(
                 val config = effectiveTtsConfig()
                 var playbackStarted = false
                 val effectiveSentences = currentSentenceToChunk.size - startTrueSentenceIdx
-                // Buffer 3 true sentences before starting playback.  Sentences are shorter than
-                // chunks (~30–60 chars vs ~150), so synthesis is faster and 3 is a good balance.
                 val bufferSize = effectiveSentences.coerceIn(1, 3)
                 val pendingItems = mutableListOf<MediaItem>()
 
                 prepareChapterAudio(chapter, startChunkIndex, config).collect { audioState ->
                     when (audioState) {
                         is ChapterAudioState.Generating -> {
-                            // AudioRepositoryImpl emits relative progress (done / totalFromStart).
                             if (!playbackStarted) {
                                 _uiState.update {
                                     it.copy(audioProgress =
@@ -427,11 +377,8 @@ class ReaderViewModel @Inject constructor(
                         }
 
                         is ChapterAudioState.ChunkReady -> {
-                            // Realtime path: one file per true sentence, arriving in synthesis order.
-                            // pendingItems[k] = true sentence (startTrueSentenceIdx + k).
                             if (!playbackStarted) {
                                 pendingItems += buildMediaItem(audioState.file, metadata)
-                                // Re-read current chunk — user may have scrolled during buffering.
                                 val freshChunk = _uiState.value.currentChunkIndex
                                 val freshSentIdx = currentSentenceToChunk
                                     .indexOfFirst { it >= freshChunk }
@@ -462,14 +409,11 @@ class ReaderViewModel @Inject constructor(
                             currentAudio = audioState.audio
                             currentPlaylistOffset = audioState.audio.playlistOffset
                             if (!playbackStarted) {
-                                // Volcengine (SingleFile) or if synthesis finished before buffering.
                                 val items = buildPlaylistItems(audioState.audio, metadata)
                                 val freshChunk = _uiState.value.currentChunkIndex
 
                                 when (val src = audioState.audio.source) {
                                     is AudioSource.PerSentence -> {
-                                        // Find first true sentence at or after freshChunk, then
-                                        // convert to playlist-relative index.
                                         val stc = audioState.audio.sentenceToChunk
                                         val offset = audioState.audio.playlistOffset
                                         val si = stc.indexOfFirst { it >= freshChunk }
@@ -479,9 +423,6 @@ class ReaderViewModel @Inject constructor(
                                         _player.setMediaItems(items, actualStart, 0L)
                                     }
                                     is AudioSource.SingleFile -> {
-                                        // Single-item seek: find the start timestamp for freshChunk.
-                                        // onMediaItemTransition won't fire during playback — chunk sync
-                                        // is driven by the position-tracking coroutine instead.
                                         val startSentenceIdx = audioState.audio.sentenceToChunk
                                             .indexOfFirst { it == freshChunk }
                                             .coerceAtLeast(0)
@@ -511,29 +452,12 @@ class ReaderViewModel @Inject constructor(
         }
     }
 
-    /**
-     * Build ExoPlayer MediaItem list from a resolved [ChapterAudio].
-     *
-     * PerSentence: one item per sentence (LOCAL_ANDROID).
-     * SingleFile:  one item for the entire chapter file (Volcengine).
-     *   Seeking within the file is done via [seekTo(positionMs)] + position-tracking coroutine
-     *   rather than ClippingConfiguration, which caused audible inter-sentence gaps.
-     */
     private fun buildPlaylistItems(audio: ChapterAudio, metadata: MediaMetadata): List<MediaItem> =
         when (val src = audio.source) {
             is AudioSource.PerSentence -> src.files.map { buildMediaItem(it, metadata) }
             is AudioSource.SingleFile  -> listOf(buildMediaItem(src.audioFile, metadata))
         }
 
-    /**
-     * Polls ExoPlayer's current position every 150 ms and updates [currentChunkIndex] via the
-     * [SentenceTimestamp] array. Used only for [AudioSource.SingleFile] (Volcengine), where the
-     * entire chapter is one media item and [Player.Listener.onMediaItemTransition] never fires
-     * during normal playback.
-     *
-     * Polling at 150 ms is well below the typical sentence length (~500–2000 ms), so the display
-     * lags the audio by at most one poll cycle — imperceptible to the listener.
-     */
     private fun startPositionTracking(audio: ChapterAudio) {
         val src = audio.source as? AudioSource.SingleFile ?: return
         positionTrackJob?.cancel()
@@ -541,7 +465,6 @@ class ReaderViewModel @Inject constructor(
             while (true) {
                 val posMs = _player.currentPosition
                 if (posMs >= 0) {
-                    // Find the last atom whose start time is ≤ posMs (linear scan, ~50–150 items).
                     val sentenceIdx = src.timings.indexOfLast { it.startMs <= posMs }
                         .coerceAtLeast(0)
                     val chunkIdx = audio.sentenceToChunk.getOrNull(sentenceIdx)
@@ -562,19 +485,8 @@ class ReaderViewModel @Inject constructor(
 
     private fun prefetchNextChapters() {
         // LOCAL_ANDROID synthesis is on-demand (real-time); no pre-download needed.
-        // VOLCENGINE audio is user-managed from the chapter list screen.
+        // Batch TTS (VOLCENGINE / FISH_SPEECH) audio is user-managed from the chapter list screen.
         // → no-op kept as a call-site placeholder in case prefetch is added later.
-    }
-
-    private fun navigateRelative(delta: Int) {
-        val book = currentBook ?: return
-        val currentIndex = _uiState.value.chapter?.indexInBook ?: return
-        val targetIndex = currentIndex + delta
-        if (targetIndex !in book.chapters.indices) return
-        chapterLoadJob?.cancel()
-        chapterLoadJob = viewModelScope.launch {
-            loadChapterAt(book, ReadingPosition(bookId, book.chapters[targetIndex].id, 0))
-        }
     }
 
     private suspend fun loadChapterAt(book: EpubBook, position: ReadingPosition) {
@@ -583,7 +495,7 @@ class ReaderViewModel @Inject constructor(
         positionTrackJob?.cancel()
         _player.stop()
         _player.clearMediaItems()
-        deleteAllLocalTtsFiles()   // clean up any remaining temp files from the previous chapter
+        deleteAllLocalTtsFiles()
         currentAudio = null
         currentPlaylistOffset = 0
         currentSentenceToChunk = emptyList()
@@ -595,13 +507,11 @@ class ReaderViewModel @Inject constructor(
             .onSuccess { chapter ->
                 _uiState.update {
                     it.copy(
-                        bookTitle = book.title,
-                        chapterTitle = chapter.title,
-                        chapter = chapter,
+                        bookTitle         = book.title,
+                        chapterTitle      = chapter.title,
+                        chapter           = chapter,
                         currentChunkIndex = position.indexInChapter,
-                        hasPrevChapter = chapter.indexInBook > 0,
-                        hasNextChapter = chapter.indexInBook < book.chapterCount - 1,
-                        isLoading = false
+                        isLoading         = false
                     )
                 }
                 progressRepository.savePosition(position)
@@ -613,14 +523,6 @@ class ReaderViewModel @Inject constructor(
 
     // ── Audio state reset ─────────────────────────────────────────────────────
 
-    /**
-     * Cancel synthesis, stop the player, and clear all audio state.
-     * Does NOT start new synthesis — the user must press play explicitly.
-     *
-     * Called when:
-     *  - User seeks past the LOCAL_ANDROID sliding window (file deleted)
-     *  - ExoPlayer reports ERROR_CODE_IO_FILE_NOT_FOUND (same root cause, caught reactively)
-     */
     private fun stopAndClearAudio() {
         audioJob?.cancel()
         positionTrackJob?.cancel()
@@ -635,55 +537,27 @@ class ReaderViewModel @Inject constructor(
 
     // ── Local TTS file lifecycle ──────────────────────────────────────────────
 
-    /** Delete one temp WAV file by playlist index (no-op for SingleFile or if already deleted). */
     private fun deleteLocalTtsFile(playlistIndex: Int) {
         (currentAudio?.source as? AudioSource.PerSentence)
             ?.files?.getOrNull(playlistIndex)?.delete()
     }
 
-    /** Delete all remaining temp WAV files for the current chapter. */
     private fun deleteAllLocalTtsFiles() {
         (currentAudio?.source as? AudioSource.PerSentence)
             ?.files?.forEach { it.delete() }
     }
 
-    /**
-     * Playlist index → display chunk index.
-     *
-     * For realtime (PerSentence) audio, each playlist item = one true sentence.
-     * `index = playlistIndex + offset` = absolute true-sentence index.
-     * `sentenceToChunk[index]` = chunk of that sentence's first atom.
-     *
-     * Primary path (after [currentAudio] is set): uses [ChapterAudio.sentenceToChunk].
-     * Streaming-phase fallback (before [currentAudio] is resolved): uses [currentSentenceToChunk],
-     * which is computed at synthesis start and stays valid throughout streaming.
-     *
-     * For batch (SingleFile) audio, [currentAudio] is always set before the first
-     * [onMediaItemTransition], so the fallback is never reached on that path.
-     */
     private fun playlistIndexToChunk(playlistIndex: Int): Int? {
         val offset = currentAudio?.playlistOffset ?: currentPlaylistOffset
-        val index  = playlistIndex + offset   // absolute true-sentence index
+        val index  = playlistIndex + offset
         return currentAudio?.sentenceToChunk?.getOrNull(index)
             ?: currentSentenceToChunk.getOrNull(index)
     }
 
-    /**
-     * Pre-computes the true-sentence → chunk mapping from the chapter's sentence atoms.
-     *
-     * Mirrors the logic in [AudioRepositoryImpl.buildTrueSentences]: groups consecutive atoms
-     * until one ends with terminal punctuation (。！？…!?.), then records the chunk index of
-     * the first atom in each group.
-     *
-     * The result is stored in [currentSentenceToChunk] so [playlistIndexToChunk] can resolve
-     * transitions during the streaming phase before [currentAudio] is set.
-     */
     private fun computeSentenceToChunk(chapter: Chapter): List<Int> {
         val result = mutableListOf<Int>()
         var firstChunk = -1
         for (atom in chapter.sentences) {
-            // Mirror the skip logic in AudioRepositoryImpl.buildTrueSentences():
-            // noise-only atoms (URLs, lone brackets) must not claim firstChunk.
             if (cleanForTts(atom.text).isBlank()) continue
             if (firstChunk < 0) firstChunk = atom.chunkIndex
             val last = atom.text.trimEnd().lastOrNull()
@@ -692,7 +566,7 @@ class ReaderViewModel @Inject constructor(
                 firstChunk = -1
             }
         }
-        if (firstChunk >= 0) result += firstChunk   // trailing non-terminal atoms
+        if (firstChunk >= 0) result += firstChunk
         return result
     }
 

@@ -7,7 +7,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
@@ -34,10 +36,9 @@ fun LibraryScreen(
     onSettingsOpen: () -> Unit,
     viewModel: LibraryViewModel = hiltViewModel()
 ) {
-    val books by viewModel.books.collectAsStateWithLifecycle()
+    val books     by viewModel.books.collectAsStateWithLifecycle()
     val importing by viewModel.importing.collectAsStateWithLifecycle()
-    val error by viewModel.error.collectAsStateWithLifecycle()
-    val sherpaModelReady by viewModel.sherpaModelReady.collectAsStateWithLifecycle()
+    val error     by viewModel.error.collectAsStateWithLifecycle()
 
     val launcher = rememberLauncherForActivityResult(GetContent()) { uri ->
         uri?.let { viewModel.import(it) }
@@ -47,7 +48,7 @@ fun LibraryScreen(
         AlertDialog(
             onDismissRequest = viewModel::clearError,
             title = { Text("导入失败") },
-            text = { Text(it) },
+            text  = { Text(it) },
             confirmButton = { TextButton(onClick = viewModel::clearError) { Text("确认") } }
         )
     }
@@ -67,9 +68,9 @@ fun LibraryScreen(
             FloatingActionButton(onClick = { if (!importing) launcher.launch("application/epub+zip") }) {
                 if (importing) {
                     CircularProgressIndicator(
-                        modifier = Modifier.size(24.dp),
+                        modifier    = Modifier.size(24.dp),
                         strokeWidth = 2.dp,
-                        color = MaterialTheme.colorScheme.onPrimaryContainer
+                        color       = MaterialTheme.colorScheme.onPrimaryContainer
                     )
                 } else {
                     Icon(Icons.Default.Add, contentDescription = "导入书籍")
@@ -82,18 +83,17 @@ fun LibraryScreen(
         } else {
             LazyColumn(
                 contentPadding = PaddingValues(
-                    start = 16.dp, end = 16.dp,
-                    top = padding.calculateTopPadding() + 8.dp,
+                    start  = 16.dp, end    = 16.dp,
+                    top    = padding.calculateTopPadding() + 8.dp,
                     bottom = padding.calculateBottomPadding() + 80.dp
                 ),
                 verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
                 items(books, key = { it.id }) { book ->
                     BookCard(
-                        book = book,
-                        sherpaModelReady = sherpaModelReady,
-                        onClick = { onBookOpen(book.id) },
-                        onDelete = { viewModel.delete(book) },
+                        book        = book,
+                        onClick     = { onBookOpen(book.id) },
+                        onDelete    = { viewModel.delete(book) },
                         onTtsChange = { provider, voice -> viewModel.setBookTts(book.id, provider, voice) }
                     )
                 }
@@ -105,20 +105,19 @@ fun LibraryScreen(
 @Composable
 private fun BookCard(
     book: EpubBook,
-    sherpaModelReady: Boolean,
     onClick: () -> Unit,
     onDelete: () -> Unit,
     onTtsChange: (TtsProvider?, String?) -> Unit
 ) {
     var showDeleteDialog by remember { mutableStateOf(false) }
-    var showTtsDialog by remember { mutableStateOf(false) }
+    var showTtsDialog    by remember { mutableStateOf(false) }
     val currentChoice = TtsVoiceCatalog.findChoice(book.ttsProvider, book.ttsVoice)
 
     if (showDeleteDialog) {
         AlertDialog(
             onDismissRequest = { showDeleteDialog = false },
             title = { Text("删除这本书？") },
-            text = { Text("「${book.title}」将从书库中移除。") },
+            text  = { Text("「${book.title}」将从书库中移除。") },
             confirmButton = {
                 TextButton(onClick = { showDeleteDialog = false; onDelete() }) {
                     Text("删除", color = MaterialTheme.colorScheme.error)
@@ -133,7 +132,6 @@ private fun BookCard(
     if (showTtsDialog) {
         TtsPickerDialog(
             currentChoice = currentChoice,
-            sherpaModelReady = sherpaModelReady,
             onSelect = { choice ->
                 onTtsChange(choice?.provider, choice?.voiceId)
                 showTtsDialog = false
@@ -144,11 +142,11 @@ private fun BookCard(
 
     Card(
         modifier = Modifier.fillMaxWidth().clickable(onClick = onClick),
-        shape = RoundedCornerShape(12.dp)
+        shape    = RoundedCornerShape(12.dp)
     ) {
         Row(
-            modifier = Modifier.padding(12.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            modifier              = Modifier.padding(12.dp),
+            verticalAlignment     = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             Box(
@@ -159,7 +157,7 @@ private fun BookCard(
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = book.title.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
+                    text  = book.title.firstOrNull()?.uppercaseChar()?.toString() ?: "?",
                     style = MaterialTheme.typography.headlineSmall,
                     color = MaterialTheme.colorScheme.onPrimaryContainer
                 )
@@ -167,32 +165,32 @@ private fun BookCard(
 
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = book.title,
-                    style = MaterialTheme.typography.bodyLarge,
+                    text       = book.title,
+                    style      = MaterialTheme.typography.bodyLarge,
                     fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
+                    maxLines   = 2,
+                    overflow   = TextOverflow.Ellipsis
                 )
                 book.author?.let {
                     Text(
-                        text = it,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        text     = it,
+                        style    = MaterialTheme.typography.bodyMedium,
+                        color    = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
                 }
                 Text(
-                    text = "${book.chapterCount} 章",
+                    text  = "${book.chapterCount} 章",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
                 AssistChip(
-                    onClick = { showTtsDialog = true },
-                    label = {
+                    onClick  = { showTtsDialog = true },
+                    label    = {
                         Text(
                             currentChoice?.label ?: "默认 TTS",
-                            style = MaterialTheme.typography.labelSmall,
+                            style    = MaterialTheme.typography.labelSmall,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -205,7 +203,7 @@ private fun BookCard(
                 Icon(
                     Icons.Default.Delete,
                     contentDescription = "删除",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    tint               = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         }
@@ -215,53 +213,37 @@ private fun BookCard(
 @Composable
 private fun TtsPickerDialog(
     currentChoice: TtsChoice?,
-    sherpaModelReady: Boolean,
     onSelect: (TtsChoice?) -> Unit,
     onDismiss: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("朗读方式") },
-        text = {
-            LazyColumn {
-                item {
+        text  = {
+            // Column + verticalScroll: LazyColumn inside AlertDialog gets measured at
+            // 0 height (AlertDialog's text slot is itself scrollable), making items invisible.
+            Column(modifier = Modifier.verticalScroll(rememberScrollState())) {
+                TextButton(
+                    onClick  = { onSelect(null) },
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        "默认（跟随全局设置）",
+                        color = if (currentChoice == null) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onSurface
+                    )
+                }
+                HorizontalDivider()
+                TtsVoiceCatalog.allChoices.forEach { choice ->
                     TextButton(
-                        onClick = { onSelect(null) },
+                        onClick  = { onSelect(choice) },
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(
-                            "默认（跟随全局设置）",
-                            color = if (currentChoice == null) MaterialTheme.colorScheme.primary
+                            choice.label,
+                            color = if (choice == currentChoice) MaterialTheme.colorScheme.primary
                                     else MaterialTheme.colorScheme.onSurface
                         )
-                    }
-                    HorizontalDivider()
-                }
-                items(TtsVoiceCatalog.allChoices) { choice ->
-                    val isSherpa = choice.provider == TtsProvider.LOCAL_SHERPA_ONNX
-                    val sherpaNotReady = isSherpa && !sherpaModelReady
-                    Column(modifier = Modifier.fillMaxWidth()) {
-                        TextButton(
-                            onClick = { onSelect(choice) },
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Text(
-                                choice.label,
-                                color = when {
-                                    choice == currentChoice -> MaterialTheme.colorScheme.primary
-                                    else -> MaterialTheme.colorScheme.onSurface
-                                }
-                            )
-                        }
-                        // Warn when the VITS model has not been imported yet.
-                        if (sherpaNotReady) {
-                            Text(
-                                "⚠ 尚未导入语音包，请先前往设置导入 .tar.bz2 文件",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.padding(start = 12.dp, bottom = 4.dp, end = 12.dp)
-                            )
-                        }
                     }
                 }
             }

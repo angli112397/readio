@@ -1,7 +1,7 @@
 package com.example.readio.domain.model
 
 sealed class ChapterAudioStatus {
-    /** Provider is realtime (LOCAL_ANDROID, LOCAL_SHERPA_ONNX) — no pre-download needed. */
+    /** Provider is realtime (LOCAL_ANDROID) — no pre-download needed. */
     data object NotApplicable : ChapterAudioStatus()
     data object NotDownloaded : ChapterAudioStatus()
     /**

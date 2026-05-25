@@ -12,8 +12,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
-import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.automirrored.filled.List
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
@@ -82,8 +80,7 @@ fun ReaderScreen(
             )
         },
         bottomBar = {
-            // Thin chapter-progress indicator sits flush above the bottom bar —
-            // no padding so the line feels like it belongs to the bar, not the content.
+            // Thin chapter-progress indicator sits flush above the bottom bar.
             Column {
                 LinearProgressIndicator(
                     progress = { chapterProgress },
@@ -92,16 +89,10 @@ fun ReaderScreen(
                     trackColor = MaterialTheme.colorScheme.surfaceVariant
                 )
                 PlayerBar(
-                    isPlaying = state.isPlaying,
+                    isPlaying       = state.isPlaying,
                     audioGenerating = state.audioGenerating,
-                    audioProgress = state.audioProgress,
-                    hasPrev = state.hasPrevChapter,
-                    hasNext = state.hasNextChapter,
-                    speechRate = state.speechRate,
-                    onPlayPause = viewModel::onPlayPause,
-                    onPrev = viewModel::navigatePrevChapter,
-                    onNext = viewModel::navigateNextChapter,
-                    onSpeedChange = viewModel::onSpeechRateStep
+                    audioProgress   = state.audioProgress,
+                    onPlayPause     = viewModel::onPlayPause,
                 )
             }
         }
@@ -134,7 +125,6 @@ fun ReaderScreen(
             }
 
             // Translation card — overlay at top, slides down from TopAppBar.
-            // Tap the card (or tap the center chunk again) to dismiss.
             AnimatedVisibility(
                 visible = state.wordLookup != null,
                 enter = slideInVertically { -it } + fadeIn(),
@@ -173,7 +163,6 @@ private fun WordLookupCard(lookup: WordLookup, onDismiss: () -> Unit) {
                 .verticalScroll(rememberScrollState()),
             verticalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            // Original text — muted, truncated to two lines
             Text(
                 text = lookup.word,
                 style = MaterialTheme.typography.bodySmall,
@@ -217,40 +206,13 @@ private fun PlayerBar(
     isPlaying: Boolean,
     audioGenerating: Boolean,
     audioProgress: Float,
-    hasPrev: Boolean,
-    hasNext: Boolean,
-    speechRate: Float,
     onPlayPause: () -> Unit,
-    onPrev: () -> Unit,
-    onNext: () -> Unit,
-    onSpeedChange: () -> Unit,
 ) {
     BottomAppBar(contentPadding = PaddingValues(horizontal = 4.dp)) {
-        Row(
+        Box(
             modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically
+            contentAlignment = Alignment.Center
         ) {
-            // ← Prev chapter
-            IconButton(onClick = onPrev, enabled = hasPrev && !audioGenerating) {
-                Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowLeft,
-                    contentDescription = "上一章"
-                )
-            }
-
-            // Speed label — tap to cycle through presets
-            TextButton(
-                onClick = onSpeedChange,
-                enabled = !audioGenerating,
-                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-            ) {
-                Text(
-                    text = formatSpeechRate(speechRate),
-                    style = MaterialTheme.typography.labelLarge
-                )
-            }
-
             // Play / pause / generating indicator
             Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
                 if (audioGenerating) {
@@ -259,8 +221,6 @@ private fun PlayerBar(
                         modifier = Modifier.size(40.dp),
                         strokeWidth = 3.dp
                     )
-                    // Show percentage only after at least 1 % is done,
-                    // so the initial "0%" flash doesn't appear.
                     if (audioProgress > 0.01f) {
                         Text(
                             text = "${(audioProgress * 100).toInt()}%",
@@ -278,23 +238,6 @@ private fun PlayerBar(
                     }
                 }
             }
-
-            // Next chapter →
-            IconButton(onClick = onNext, enabled = hasNext && !audioGenerating) {
-                Icon(
-                    Icons.AutoMirrored.Filled.KeyboardArrowRight,
-                    contentDescription = "下一章"
-                )
-            }
         }
     }
-}
-
-/**
- * Format a speech-rate float for compact display.
- * 1.0 → "1×"   0.75 → "0.75×"   1.25 → "1.25×"   2.0 → "2×"
- */
-private fun formatSpeechRate(rate: Float): String {
-    val s = "%.2f".format(rate).trimEnd('0').trimEnd('.')
-    return "$s×"
 }

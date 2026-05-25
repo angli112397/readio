@@ -7,7 +7,7 @@ import com.example.readio.domain.manager.AudioDownloadManager
 import com.example.readio.domain.model.ChapterAudioStatus
 import com.example.readio.domain.model.ChapterIndex
 import com.example.readio.domain.model.EpubBook
-import com.example.readio.domain.model.TtsProvider
+import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.repository.EpubRepository
 import com.example.readio.domain.repository.SettingsRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -16,9 +16,7 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.first
-import kotlinx.coroutines.flow.launchIn
 import kotlinx.coroutines.flow.mapNotNull
-import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -33,7 +31,7 @@ data class ChapterListUiState(
     val bookTitle: String = "",
     val chapters: List<ChapterUiItem> = emptyList(),
     val isLoading: Boolean = true,
-    /** True when the active TTS provider supports pre-download (batch engines). */
+    /** True when the effective TTS provider supports pre-download (batch engines). */
     val isDownloadableProvider: Boolean = false,
     val isBulkDownloading: Boolean = false,
     val bulkDone: Int = 0,
@@ -54,6 +52,10 @@ class ChapterListViewModel @Inject constructor(
     val uiState: StateFlow<ChapterListUiState> = combine(
         _book, downloadManager.state, settingsRepository.observeTtsConfig()
     ) { book, dlState, ttsConfig ->
+        // Effective config = global config with this book's per-book TTS override applied.
+        // This ensures download icons show correctly when a book has a different TTS provider
+        // than the global default.
+        val effectiveConfig = ttsConfig.applyBookOverride(book?.ttsProvider, book?.ttsVoice)
         ChapterListUiState(
             bookId               = bookId,
             bookTitle            = book?.title ?: "",
@@ -61,7 +63,7 @@ class ChapterListViewModel @Inject constructor(
                 ChapterUiItem(c, dlState.statusMap[c.id] ?: ChapterAudioStatus.NotDownloaded)
             } ?: emptyList(),
             isLoading            = book == null,
-            isDownloadableProvider = ttsConfig.provider == TtsProvider.VOLCENGINE,
+            isDownloadableProvider = effectiveConfig.isBatchProvider,
             isBulkDownloading    = dlState.isBulkDownloading,
             bulkDone             = dlState.bulkDone,
             bulkTotal            = dlState.bulkTotal
@@ -77,8 +79,19 @@ class ChapterListViewModel @Inject constructor(
                 .mapNotNull { list -> list.find { it.id == bookId } }
                 .first()
             _book.value = book
-            downloadManager.checkStatuses(book.chapters)
+            val effectiveConfig = effectiveConfig()
+            downloadManager.checkStatuses(book.chapters, effectiveConfig)
         }
+    }
+
+    /**
+     * Compute effective TtsConfig = global + this book's per-book override.
+     * Used to ensure downloads use the correct engine for this book.
+     */
+    private suspend fun effectiveConfig(): TtsConfig {
+        val global = settingsRepository.getTtsConfig()
+        val book   = _book.value ?: return global
+        return global.applyBookOverride(book.ttsProvider, book.ttsVoice)
     }
 
     /**
@@ -87,8 +100,11 @@ class ChapterListViewModel @Inject constructor(
      * If the chapter has a [ChapterAudioStatus.HasTaskId], the engine automatically picks up
      * the saved task ID and continues polling without re-submitting.
      */
-    fun downloadChapter(item: ChapterUiItem) =
-        downloadManager.downloadChapter(bookId, item.chapterIndex)
+    fun downloadChapter(item: ChapterUiItem) {
+        viewModelScope.launch {
+            downloadManager.downloadChapter(bookId, item.chapterIndex, effectiveConfig())
+        }
+    }
 
     /**
      * Persist an externally-obtained task ID without making any API call.
@@ -99,8 +115,10 @@ class ChapterListViewModel @Inject constructor(
 
     /** Start downloading all chapters that are not yet downloaded. */
     fun downloadAll() {
-        val chapters = _book.value?.chapters ?: return
-        downloadManager.downloadAll(bookId, chapters)
+        viewModelScope.launch {
+            val chapters = _book.value?.chapters ?: return@launch
+            downloadManager.downloadAll(bookId, chapters, effectiveConfig())
+        }
     }
 
     fun cancelBulkDownload() = downloadManager.cancelBulk()

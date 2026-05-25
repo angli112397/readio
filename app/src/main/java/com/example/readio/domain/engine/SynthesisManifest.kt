@@ -18,14 +18,21 @@ data class SynthesisManifest(
      * For PER_SENTENCE: = chapter.sentences.size.
      */
     val sentenceCount: Int,
-    val timings: List<SentenceTiming>
+    val timings: List<SentenceTiming>,
+    /**
+     * Filename of the audio file within the chapter cache directory.
+     * Determined at download time from the server's Content-Type header.
+     * Defaults to "audio.mp3" for backward compatibility with manifests that pre-date
+     * WAV support. Current possible values: "audio.mp3", "audio.wav".
+     */
+    val audioFileName: String = "audio.mp3"
 )
 
 /** How the audio content is stored on disk. */
 enum class AudioFormat {
     /**
-     * One audio file for the entire chapter (e.g. Volcengine async MP3).
-     * File name: "audio.mp3" in the chapter cache directory.
+     * One audio file for the entire chapter (Volcengine cloud MP3 or local-server WAV/MP3).
+     * File name stored in [SynthesisManifest.audioFileName]; default "audio.mp3".
      * Playback: single ExoPlayer item; chunk sync driven by position-polling + [SentenceTiming].
      */
     SINGLE_FILE,
@@ -69,6 +76,12 @@ sealed class BatchSynthesisEvent {
     data class Progress(val done: Int, val total: Int, val label: String = "") : BatchSynthesisEvent()
     /** Synthesis complete; cacheDir now contains a valid manifest + audio file(s). */
     data object Complete : BatchSynthesisEvent()
+    /**
+     * Task submitted but server has not finished synthesis yet.
+     * [taskId] is already persisted to disk; the caller should show a "pending" UI
+     * and let the user re-trigger a status check manually.
+     */
+    data class Submitted(val taskId: String) : BatchSynthesisEvent()
     /** Unrecoverable failure; synthesis did NOT complete. */
     data class Failed(val error: Throwable) : BatchSynthesisEvent()
 }

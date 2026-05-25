@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Allow plain HTTP connections — needed for Fish Speech local server (http://192.168.x.x:port).
+    Cloud APIs (Volcengine) already use HTTPS and are unaffected.
+    base-config covers all hosts including bare IP addresses which domain-config cannot match.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true"/>
+</network-security-config>

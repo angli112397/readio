@@ -19,8 +19,6 @@ dependencyResolutionManagement {
     repositories {
         google()
         mavenCentral()
-        // Sherpa-ONNX: the AAR is published to GitHub Releases; JitPack wraps it.
-        maven { url = uri("https://jitpack.io") }
     }
 }
 

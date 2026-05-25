@@ -5,54 +5,67 @@ import java.io.File
 
 enum class TtsProvider(val displayName: String) {
     LOCAL_ANDROID("系统 TTS（实时）"),
-    LOCAL_SHERPA_ONNX("本地神经网络（离线）"),
-    VOLCENGINE("火山引擎豆包（离线）")
+    VOLCENGINE("火山引擎（云端）"),
+    FISH_SPEECH("Fish Speech（本地推理）")
 }
 
 data class TtsConfig(
     val provider: TtsProvider = TtsProvider.LOCAL_ANDROID,
     // LOCAL_ANDROID
     val androidLocale: String = "zh-CN",
-    // VOLCENGINE — 精品长文本 v1 API
+    // VOLCENGINE — 精品长文本 v1 API (cloud only)
     val volcAppId: String = "",
-    val volcAccessKey: String = "",   // used as Bearer token
-    val volcSpeaker: String = "",     // voice_type, e.g. "BV001_streaming"
+    val volcAccessKey: String = "",   // Bearer token
+    val volcSpeaker: String = "",     // voice_type (e.g. "BV406_V2_streaming")
+    // FISH_SPEECH — local GPU inference server (Volcengine-compatible API, no auth)
+    val fishSpeechUrl: String = "",
     // Common
     val speechRate: Float = 1.0f
 ) {
-    // Rate excluded from cache key — applied locally via ExoPlayer setPlaybackSpeed.
+    /**
+     * Cache key encodes the synthesis parameters that affect audio content.
+     * Speech rate is excluded — applied locally via ExoPlayer setPlaybackSpeed.
+     */
     val cacheKey: String get() = when (provider) {
-        TtsProvider.LOCAL_ANDROID     -> "LOCAL|$androidLocale"
-        TtsProvider.LOCAL_SHERPA_ONNX -> "SHERPA"
-        TtsProvider.VOLCENGINE        -> "VOLC|$volcSpeaker"
+        TtsProvider.LOCAL_ANDROID -> "LOCAL|$androidLocale"
+        TtsProvider.VOLCENGINE    -> "VOLC|$volcSpeaker"
+        TtsProvider.FISH_SPEECH   -> "FISH"
     }
+
+    /** True when the active TTS provider supports batch pre-download. */
+    val isBatchProvider: Boolean
+        get() = provider == TtsProvider.VOLCENGINE || provider == TtsProvider.FISH_SPEECH
 
     /**
      * Returns a copy of this config with [provider] and [voiceId] applied as a per-book override.
      * [provider] null → returns this unchanged.
-     * Maps [voiceId] to the correct field: androidLocale for LOCAL_ANDROID,
-     * volcSpeaker for VOLCENGINE; for LOCAL_SHERPA_ONNX the voice field is irrelevant.
+     * Maps [voiceId] to the correct field based on provider.
      */
     fun applyBookOverride(provider: TtsProvider?, voiceId: String?): TtsConfig {
         if (provider == null) return this
         return copy(
             provider      = provider,
-            androidLocale = if (provider == TtsProvider.LOCAL_ANDROID) voiceId ?: androidLocale else androidLocale,
-            volcSpeaker   = if (provider == TtsProvider.VOLCENGINE)    voiceId ?: volcSpeaker   else volcSpeaker,
+            // Empty voiceId means "use global default" — don't overwrite with blank.
+            androidLocale = if (provider == TtsProvider.LOCAL_ANDROID)
+                                voiceId?.takeIf { it.isNotEmpty() } ?: androidLocale
+                            else androidLocale,
+            volcSpeaker   = if (provider == TtsProvider.VOLCENGINE)
+                                voiceId?.takeIf { it.isNotEmpty() } ?: volcSpeaker
+                            else volcSpeaker,
         )
     }
 }
 
 sealed class AudioSource {
     /**
-     * Realtime TTS (LOCAL_ANDROID, LOCAL_SHERPA_ONNX): one WAV per sentence in cacheDir.
+     * Realtime TTS (LOCAL_ANDROID): one WAV per true sentence in a temporary directory.
      * [files][i] corresponds to ExoPlayer playlist item i.
      */
     data class PerSentence(val files: List<File>) : AudioSource()
 
     /**
-     * Batch TTS (Volcengine): single MP3 for the entire chapter + per-atom timings.
-     * [timings][i].startMs/endMs drives ChunkWheel sync via position-polling.
+     * Batch TTS (VOLCENGINE cloud or FISH_SPEECH local): single audio file for the entire
+     * chapter plus per-sentence timings. Position-polling drives ChunkWheel sync.
      */
     data class SingleFile(
         val audioFile: File,

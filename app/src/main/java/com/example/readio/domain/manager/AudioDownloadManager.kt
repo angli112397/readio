@@ -1,10 +1,12 @@
 package com.example.readio.domain.manager
 
+import android.util.Log
 import com.example.readio.data.audio.cache.AudioCache
 import com.example.readio.domain.engine.BatchSynthesisEvent
 import com.example.readio.domain.engine.BatchTtsEngine
 import com.example.readio.domain.model.ChapterAudioStatus
 import com.example.readio.domain.model.ChapterIndex
+import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.TtsProvider
 import com.example.readio.domain.repository.EpubRepository
 import com.example.readio.domain.repository.SettingsRepository
@@ -59,6 +61,8 @@ class AudioDownloadManager @Inject constructor(
     private var bulkJob: Job? = null
     private var lastChapters: List<ChapterIndex> = emptyList()
 
+    companion object { private const val TAG = "AudioDownloadManager" }
+
     init {
         // Re-check statuses when TTS config changes (provider or voice switch).
         scope.launch {
@@ -78,12 +82,15 @@ class AudioDownloadManager @Inject constructor(
     /**
      * Populate [state.statusMap] for all [chapters] that don't have a status yet.
      * Called on screen open and after config changes.
+     *
+     * [ttsConfig] — optional effective config (global + per-book override).
+     * When null, falls back to the global config from [SettingsRepository].
      */
-    fun checkStatuses(chapters: List<ChapterIndex>) {
+    fun checkStatuses(chapters: List<ChapterIndex>, ttsConfig: TtsConfig? = null) {
         if (chapters.isNotEmpty()) lastChapters = chapters
         scope.launch {
-            val ttsConfig = settingsRepository.getTtsConfig()
-            val engine    = batchEngineMap[ttsConfig.provider]
+            val config = ttsConfig ?: settingsRepository.getTtsConfig()
+            val engine = batchEngineMap[config.provider]
 
             if (engine == null) {
                 // Realtime provider — no download concept
@@ -97,12 +104,12 @@ class AudioDownloadManager @Inject constructor(
 
             val statuses = unknown.map { chapter ->
                 val status: ChapterAudioStatus = when {
-                    engine.hasChapter(chapter.id, ttsConfig) ->
+                    engine.hasChapter(chapter.id, config) ->
                         ChapterAudioStatus.Downloaded
 
-                    engine.pendingTaskId(chapter.id, ttsConfig) != null ->
+                    engine.pendingTaskId(chapter.id, config) != null ->
                         ChapterAudioStatus.HasTaskId(
-                            engine.pendingTaskId(chapter.id, ttsConfig)!!
+                            engine.pendingTaskId(chapter.id, config)!!
                         )
 
                     else -> ChapterAudioStatus.NotDownloaded
@@ -118,16 +125,19 @@ class AudioDownloadManager @Inject constructor(
     /**
      * Download (or resume) synthesis for [chapter].
      *
+     * [ttsConfig] — optional effective config (global + per-book override).
+     * When null, falls back to the global config from [SettingsRepository].
+     *
      * Internally calls [BatchTtsEngine.synthesize], which handles submit → poll → download
      * as a single Flow. The engine resumes from a saved task ID if the app was previously
      * killed mid-synthesis.
      */
-    fun downloadChapter(bookId: String, chapter: ChapterIndex) {
+    fun downloadChapter(bookId: String, chapter: ChapterIndex, ttsConfig: TtsConfig? = null) {
         if (_state.value.statusMap[chapter.id] is ChapterAudioStatus.Downloading) return
         scope.launch {
             setStatus(chapter.id, ChapterAudioStatus.Downloading(0f))
-            val ttsConfig = settingsRepository.getTtsConfig()
-            val engine    = batchEngineMap[ttsConfig.provider]
+            val config = ttsConfig ?: settingsRepository.getTtsConfig()
+            val engine = batchEngineMap[config.provider]
                 ?: run {
                     setStatus(chapter.id, ChapterAudioStatus.Error("当前 TTS 模式不支持离线下载"))
                     return@launch
@@ -139,11 +149,12 @@ class AudioDownloadManager @Inject constructor(
                 setStatus(chapter.id, ChapterAudioStatus.Error(e.message ?: "章节加载失败"))
                 return@launch
             }
-            val cacheDir = audioCache.chapterDir(chapter.id, ttsConfig.cacheKey)
+            val cacheDir = audioCache.chapterDir(chapter.id, config.cacheKey)
 
-            engine.synthesize(chapterFull.sentences, ttsConfig, cacheDir)
+            engine.synthesize(chapterFull.sentences, config, cacheDir)
                 .catch { e ->
                     if (e is kotlinx.coroutines.CancellationException) throw e
+                    Log.e(TAG, "Synthesis failed for chapter ${chapter.id} [provider=${config.provider}]", e)
                     setStatus(chapter.id, ChapterAudioStatus.Error(e.message ?: "Unknown error"))
                 }
                 .collect { event ->
@@ -151,12 +162,14 @@ class AudioDownloadManager @Inject constructor(
                         is BatchSynthesisEvent.Progress -> setStatus(
                             chapter.id,
                             ChapterAudioStatus.Downloading(
-                                progress = if (event.total > 0) event.done.toFloat() / event.total else 0f,
+                                progress = if (event.total > 0) event.done.toFloat() / event.total else -1f,
                                 label    = event.label
                             )
                         )
                         BatchSynthesisEvent.Complete ->
                             setStatus(chapter.id, ChapterAudioStatus.Downloaded)
+                        is BatchSynthesisEvent.Submitted ->
+                            setStatus(chapter.id, ChapterAudioStatus.HasTaskId(event.taskId))
                         is BatchSynthesisEvent.Failed ->
                             setStatus(chapter.id,
                                 ChapterAudioStatus.Error(event.error.message ?: "Unknown error"))
@@ -182,10 +195,13 @@ class AudioDownloadManager @Inject constructor(
     /**
      * Download all chapters that are [NotDownloaded] or [Error].
      *
-     * All chapter synthesis flows are launched concurrently so Volcengine can process them
-     * in parallel on its servers while this coroutine tracks aggregate progress.
+     * [ttsConfig] — optional effective config (global + per-book override).
+     * When null, falls back to the global config from [SettingsRepository].
+     *
+     * All chapter synthesis flows are launched concurrently so the server can process
+     * them in parallel while this coroutine tracks aggregate progress.
      */
-    fun downloadAll(bookId: String, chapters: List<ChapterIndex>) {
+    fun downloadAll(bookId: String, chapters: List<ChapterIndex>, ttsConfig: TtsConfig? = null) {
         bulkJob?.cancel()
         val pending = chapters.filter {
             _state.value.statusMap[it.id].let { s ->
@@ -197,8 +213,8 @@ class AudioDownloadManager @Inject constructor(
 
         bulkJob = scope.launch {
             try {
-                val ttsConfig = settingsRepository.getTtsConfig()
-                val engine    = batchEngineMap[ttsConfig.provider]
+                val config = ttsConfig ?: settingsRepository.getTtsConfig()
+                val engine = batchEngineMap[config.provider]
                     ?: run {
                         _state.update { it.copy(isBulkDownloading = false) }
                         return@launch
@@ -211,17 +227,22 @@ class AudioDownloadManager @Inject constructor(
                         runCatching {
                             val chapterFull = epubRepository.loadChapter(
                                 bookId, chapter.id, prefs.chunkSize)
-                            val cacheDir = audioCache.chapterDir(chapter.id, ttsConfig.cacheKey)
-                            engine.synthesize(chapterFull.sentences, ttsConfig, cacheDir)
+                            val cacheDir = audioCache.chapterDir(chapter.id, config.cacheKey)
+                            engine.synthesize(chapterFull.sentences, config, cacheDir)
                                 .collect { event ->
-                                    if (event is BatchSynthesisEvent.Progress) {
-                                        setStatus(chapter.id, ChapterAudioStatus.Downloading(
-                                            if (event.total > 0) event.done.toFloat() / event.total else 0f,
-                                            event.label
-                                        ))
+                                    when (event) {
+                                        is BatchSynthesisEvent.Progress -> setStatus(
+                                            chapter.id, ChapterAudioStatus.Downloading(
+                                                if (event.total > 0) event.done.toFloat() / event.total else -1f,
+                                                event.label
+                                            ))
+                                        is BatchSynthesisEvent.Submitted ->
+                                            setStatus(chapter.id, ChapterAudioStatus.HasTaskId(event.taskId))
+                                        else -> Unit
                                     }
                                 }
-                            setStatus(chapter.id, ChapterAudioStatus.Downloaded)
+                            if (_state.value.statusMap[chapter.id] !is ChapterAudioStatus.HasTaskId)
+                                setStatus(chapter.id, ChapterAudioStatus.Downloaded)
                         }.onFailure { e ->
                             if (e is kotlinx.coroutines.CancellationException) throw e
                             setStatus(chapter.id,

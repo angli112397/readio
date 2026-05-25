@@ -240,7 +240,7 @@ class AudioRepositoryImpl @Inject constructor(
         return when (manifest.format) {
             AudioFormat.SINGLE_FILE -> ChapterAudio(
                 chapterId       = chapterId,
-                source          = AudioSource.SingleFile(File(cacheDir, "audio.mp3"), manifest.timings),
+                source          = AudioSource.SingleFile(File(cacheDir, manifest.audioFileName), manifest.timings),
                 sentenceToChunk = sentenceToChunk,
                 config          = config
             )
