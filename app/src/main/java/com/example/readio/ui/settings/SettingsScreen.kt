@@ -41,10 +41,11 @@ fun SettingsScreen(
     var volcCredsSaved by remember { mutableStateOf(false) }
     LaunchedEffect(volcAppId, volcAccessKey, volcSpeaker) { volcCredsSaved = false }
 
-    // ── Fish Speech URL ───────────────────────────────────────────────────────
-    var fishSpeechUrl  by remember(ttsConfig.fishSpeechUrl) { mutableStateOf(ttsConfig.fishSpeechUrl) }
-    var fishUrlSaved   by remember { mutableStateOf(false) }
-    LaunchedEffect(fishSpeechUrl) { fishUrlSaved = false }
+    // ── GPT-SoVITS server settings ────────────────────────────────────────────
+    var gptSoVitsUrl   by remember(ttsConfig.gptSoVitsUrl)   { mutableStateOf(ttsConfig.gptSoVitsUrl) }
+    var gptSoVitsVoice by remember(ttsConfig.gptSoVitsVoice) { mutableStateOf(ttsConfig.gptSoVitsVoice) }
+    var gptConfigSaved by remember { mutableStateOf(false) }
+    LaunchedEffect(gptSoVitsUrl, gptSoVitsVoice) { gptConfigSaved = false }
 
     // ── Translation & display local state ────────────────────────────────────
     var translationProvider by remember(prefs.translationProvider) { mutableStateOf(prefs.translationProvider) }
@@ -77,7 +78,7 @@ fun SettingsScreen(
     // ── Navigation / flush helper ─────────────────────────────────────────────
     val flushAndBack: () -> Unit = {
         viewModel.updateVolcCredentials(volcAppId, volcAccessKey, volcSpeaker)
-        viewModel.updateFishSpeechUrl(fishSpeechUrl)
+        viewModel.updateGptSoVitsConfig(gptSoVitsUrl, gptSoVitsVoice)
         onBack()
     }
     BackHandler { flushAndBack() }
@@ -241,12 +242,12 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
-            // ════════ Fish Speech（本地推理）══════════════════════════════════
-            Text("Fish Speech（本地推理）", style = MaterialTheme.typography.titleSmall,
+            // ════════ GPT-SoVITS（本地推理）══════════════════════════════════
+            Text("GPT-SoVITS（本地推理）", style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary)
 
             Text(
-                "连接运行 Volcengine 兼容 API 的本地 GPU 推理服务（如 Fish Speech）。无需 App ID / Access Key。",
+                "连接本地 GPU 推理服务器（readio-tts）。无需 App ID / Access Key。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
@@ -254,22 +255,34 @@ fun SettingsScreen(
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text("服务器地址", style = MaterialTheme.typography.labelLarge)
                 OutlinedTextField(
-                    value         = fishSpeechUrl,
-                    onValueChange = { fishSpeechUrl = it },
+                    value         = gptSoVitsUrl,
+                    onValueChange = { gptSoVitsUrl = it },
                     modifier      = Modifier.fillMaxWidth(),
                     placeholder   = { Text("http://192.168.x.x:8000") },
                     singleLine    = true
                 )
             }
 
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("Voice ID（可选）", style = MaterialTheme.typography.labelLarge)
+                OutlinedTextField(
+                    value         = gptSoVitsVoice,
+                    onValueChange = { gptSoVitsVoice = it },
+                    modifier      = Modifier.fillMaxWidth(),
+                    placeholder   = { Text("留空使用服务器默认音色") },
+                    supportingText = { Text("对应服务器 references/gpt/ 下的文件夹名") },
+                    singleLine    = true
+                )
+            }
+
             Button(
                 onClick = {
-                    viewModel.updateFishSpeechUrl(fishSpeechUrl)
-                    fishUrlSaved = true
+                    viewModel.updateGptSoVitsConfig(gptSoVitsUrl, gptSoVitsVoice)
+                    gptConfigSaved = true
                 },
                 modifier = Modifier.fillMaxWidth()
             ) {
-                Text(if (fishUrlSaved) "✓ 已保存" else "保存地址")
+                Text(if (gptConfigSaved) "✓ 已保存" else "保存配置")
             }
 
             HorizontalDivider()

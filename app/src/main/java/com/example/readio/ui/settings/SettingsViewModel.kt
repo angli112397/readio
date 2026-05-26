@@ -66,15 +66,17 @@ class SettingsViewModel @Inject constructor(
         }
     }
 
-    // ── Fish Speech (local server) ────────────────────────────────────────────
+    // ── GPT-SoVITS (local server) ─────────────────────────────────────────────
 
     /**
-     * Saves the Fish Speech server URL.
+     * Saves the GPT-SoVITS server URL and voice ID in one write.
      * Called by the explicit Save button and on Back navigation.
      */
-    fun updateFishSpeechUrl(url: String) {
+    fun updateGptSoVitsConfig(url: String, voice: String) {
         viewModelScope.launch {
-            settingsRepository.saveTtsConfig(ttsConfig.value.copy(fishSpeechUrl = url))
+            settingsRepository.saveTtsConfig(
+                ttsConfig.value.copy(gptSoVitsUrl = url, gptSoVitsVoice = voice)
+            )
         }
     }
 

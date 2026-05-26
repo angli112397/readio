@@ -6,7 +6,7 @@ import java.io.File
 enum class TtsProvider(val displayName: String) {
     LOCAL_ANDROID("系统 TTS（实时）"),
     VOLCENGINE("火山引擎（云端）"),
-    FISH_SPEECH("Fish Speech（本地推理）")
+    GPT_SO_VITS("GPT-SoVITS（本地推理）")
 }
 
 data class TtsConfig(
@@ -17,8 +17,9 @@ data class TtsConfig(
     val volcAppId: String = "",
     val volcAccessKey: String = "",   // Bearer token
     val volcSpeaker: String = "",     // voice_type (e.g. "BV406_V2_streaming")
-    // FISH_SPEECH — local GPU inference server (Volcengine-compatible API, no auth)
-    val fishSpeechUrl: String = "",
+    // GPT_SO_VITS — local GPU inference server (readio-tts API, no auth)
+    val gptSoVitsUrl: String = "",
+    val gptSoVitsVoice: String = "",  // voice_id referencing references/gpt/; empty = server default
     // Common
     val speechRate: Float = 1.0f
 ) {
@@ -29,12 +30,12 @@ data class TtsConfig(
     val cacheKey: String get() = when (provider) {
         TtsProvider.LOCAL_ANDROID -> "LOCAL|$androidLocale"
         TtsProvider.VOLCENGINE    -> "VOLC|$volcSpeaker"
-        TtsProvider.FISH_SPEECH   -> "FISH"
+        TtsProvider.GPT_SO_VITS   -> "GPT|$gptSoVitsVoice"
     }
 
     /** True when the active TTS provider supports batch pre-download. */
     val isBatchProvider: Boolean
-        get() = provider == TtsProvider.VOLCENGINE || provider == TtsProvider.FISH_SPEECH
+        get() = provider == TtsProvider.VOLCENGINE || provider == TtsProvider.GPT_SO_VITS
 
     /**
      * Returns a copy of this config with [provider] and [voiceId] applied as a per-book override.
@@ -46,12 +47,15 @@ data class TtsConfig(
         return copy(
             provider      = provider,
             // Empty voiceId means "use global default" — don't overwrite with blank.
-            androidLocale = if (provider == TtsProvider.LOCAL_ANDROID)
-                                voiceId?.takeIf { it.isNotEmpty() } ?: androidLocale
-                            else androidLocale,
-            volcSpeaker   = if (provider == TtsProvider.VOLCENGINE)
-                                voiceId?.takeIf { it.isNotEmpty() } ?: volcSpeaker
-                            else volcSpeaker,
+            androidLocale    = if (provider == TtsProvider.LOCAL_ANDROID)
+                                   voiceId?.takeIf { it.isNotEmpty() } ?: androidLocale
+                               else androidLocale,
+            volcSpeaker      = if (provider == TtsProvider.VOLCENGINE)
+                                   voiceId?.takeIf { it.isNotEmpty() } ?: volcSpeaker
+                               else volcSpeaker,
+            gptSoVitsVoice   = if (provider == TtsProvider.GPT_SO_VITS)
+                                   voiceId?.takeIf { it.isNotEmpty() } ?: gptSoVitsVoice
+                               else gptSoVitsVoice,
         )
     }
 }
