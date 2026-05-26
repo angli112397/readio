@@ -14,9 +14,11 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.example.readio.PlaybackService
 import com.example.readio.data.audio.cleanForTts
+import com.example.readio.domain.manager.AudioDownloadManager
 import com.example.readio.domain.model.AudioSource
 import com.example.readio.domain.model.Chapter
 import com.example.readio.domain.model.ChapterAudio
+import com.example.readio.domain.model.ChapterAudioStatus
 import com.example.readio.domain.model.EpubBook
 import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.ReadingPosition
@@ -69,6 +71,18 @@ data class ReaderUiState(
     val audioProgress: Float = 0f,
     val audioError: String? = null,
     val wordLookup: WordLookup? = null,
+    /**
+     * Non-null when provider is a batch engine (GPT_SO_VITS, VOLCENGINE).
+     * Drives the player-bar state machine: Download → Downloading → HasTaskId → Downloaded → Playing.
+     * Null for realtime providers (LOCAL_ANDROID) — player bar shows only play/pause.
+     */
+    val batchAudioStatus: ChapterAudioStatus? = null,
+    /**
+     * True when the batch-status overlay card is visible.
+     * Shown when user taps the download/hourglass/progress button.
+     * Auto-dismissed when status transitions to [ChapterAudioStatus.Downloaded].
+     */
+    val showBatchStatusCard: Boolean = false,
 )
 
 @HiltViewModel
@@ -80,7 +94,8 @@ class ReaderViewModel @Inject constructor(
     private val settingsRepository: SettingsRepository,
     private val getReadingPosition: GetReadingPositionUseCase,
     private val prepareChapterAudio: PrepareChapterAudioUseCase,
-    private val vocabularyRepository: VocabularyRepository
+    private val vocabularyRepository: VocabularyRepository,
+    private val downloadManager: AudioDownloadManager,
 ) : ViewModel() {
 
     val bookId: String = checkNotNull(savedStateHandle["bookId"])
@@ -106,6 +121,8 @@ class ReaderViewModel @Inject constructor(
     private var lookupJob: Job? = null
     /** Polls ExoPlayer position every 150 ms to drive chunk sync for SingleFile (batch TTS). */
     private var positionTrackJob: Job? = null
+    /** Observes AudioDownloadManager status for the current chapter (batch providers only). */
+    private var batchStatusJob: Job? = null
 
     /** Current resolved audio — holds sentenceToChunk for sync regardless of AudioSource type. */
     private var currentAudio: ChapterAudio? = null
@@ -176,13 +193,18 @@ class ReaderViewModel @Inject constructor(
                 .onEach { config -> _player.setPlaybackSpeed(config.speechRate) }
                 .launchIn(viewModelScope)
 
-            // Discard stale audio when provider or voice changes (cacheKey encodes both).
+            // Discard stale audio and restart batch-status observation when provider/voice changes.
             // speechRate changes are handled above via setPlaybackSpeed — no restart needed.
             settingsRepository.observeTtsConfig()
                 .map { it.cacheKey }
                 .distinctUntilChanged()
                 .drop(1)   // skip initial emission — audio is not stale at startup
-                .onEach { stopAndClearAudio() }
+                .onEach {
+                    stopAndClearAudio()
+                    // Re-seed batch status for the current chapter with the new config so the
+                    // player bar correctly reflects Downloaded/NotDownloaded for the new provider.
+                    _uiState.value.chapter?.let { startBatchStatusObservation(it) }
+                }
                 .launchIn(viewModelScope)
 
             readingPrefs
@@ -235,14 +257,61 @@ class ReaderViewModel @Inject constructor(
         // No seek needed — onScrollStarted() already stopped audio before scroll settled.
     }
 
+    /**
+     * Play/pause for realtime TTS and for batch TTS once audio is cached.
+     * Not called when the button shows Download / Hourglass / Progress icons.
+     */
     fun onPlayPause() {
-        // Both manual pause and scroll-to-stop call stopAndClearAudio(), keeping them identical:
-        // audio and position tracking stop immediately, ChunkWheel stays wherever it is.
-        // Pressing play always re-synthesises / re-loads from the current chunk position.
         if (_player.isPlaying || _uiState.value.audioGenerating) {
             stopAndClearAudio(); return
         }
         generateAndPlay()
+    }
+
+    /**
+     * Start synthesis (or resume from existing task ID) for the current chapter.
+     *
+     * Covers "NotDownloaded" and "HasTaskId" states. Shows the status card so the user
+     * can see live progress feedback (mirrors the translation card pattern).
+     */
+    fun onCacheChapter() {
+        val chapter = _uiState.value.chapter ?: return
+        // Dismiss translation card to avoid dual overlay.
+        _uiState.update { it.copy(
+            showBatchStatusCard = true,
+            wordLookup = null
+        )}
+        viewModelScope.launch {
+            val config = effectiveTtsConfig()
+            downloadManager.downloadChapterFull(chapter, config)
+        }
+    }
+
+    /**
+     * Show the status card while a download is in progress (Downloading state).
+     * Does not trigger any additional network calls.
+     */
+    fun onShowBatchStatusCard() {
+        _uiState.update { it.copy(
+            showBatchStatusCard = true,
+            wordLookup = null
+        )}
+    }
+
+    /** Dismiss the batch status card without taking any other action. */
+    fun dismissBatchStatusCard() {
+        _uiState.update { it.copy(showBatchStatusCard = false) }
+    }
+
+    /**
+     * Cancel an in-progress synthesis and delete any partially-downloaded files.
+     * Equivalent to "delete" for already-cached audio — both reset status to NotDownloaded.
+     */
+    fun onClearChapterAudio() {
+        val chapter = _uiState.value.chapter ?: return
+        stopAndClearAudio()
+        downloadManager.clearChapter(chapter.id)
+        _uiState.update { it.copy(showBatchStatusCard = false) }
     }
 
     fun dismissAudioError() = _uiState.update { it.copy(audioError = null) }
@@ -260,8 +329,12 @@ class ReaderViewModel @Inject constructor(
             dismissWordLookup(); return
         }
 
+        // Dismiss batch status card to avoid dual overlay.
         lookupJob?.cancel()
-        _uiState.update { it.copy(wordLookup = WordLookup(word = contextText)) }
+        _uiState.update { it.copy(
+            wordLookup = WordLookup(word = contextText),
+            showBatchStatusCard = false
+        )}
         lookupJob = viewModelScope.launch {
             val targetCode = readingPrefs.value.translationLanguage.code
             try {
@@ -485,7 +558,7 @@ class ReaderViewModel @Inject constructor(
 
     private fun prefetchNextChapters() {
         // LOCAL_ANDROID synthesis is on-demand (real-time); no pre-download needed.
-        // Batch TTS (VOLCENGINE / FISH_SPEECH) audio is user-managed from the chapter list screen.
+        // Batch TTS (VOLCENGINE / GPT_SO_VITS) audio is user-managed from the reader.
         // → no-op kept as a call-site placeholder in case prefetch is added later.
     }
 
@@ -493,6 +566,7 @@ class ReaderViewModel @Inject constructor(
         audioJob?.cancel()
         prefetchJob?.cancel()
         positionTrackJob?.cancel()
+        batchStatusJob?.cancel()
         _player.stop()
         _player.clearMediaItems()
         deleteAllLocalTtsFiles()
@@ -500,7 +574,15 @@ class ReaderViewModel @Inject constructor(
         currentPlaylistOffset = 0
         currentSentenceToChunk = emptyList()
         _uiState.update {
-            it.copy(isLoading = true, error = null, isPlaying = false, audioGenerating = false)
+            it.copy(
+                isLoading = true,
+                error = null,
+                isPlaying = false,
+                audioGenerating = false,
+                batchAudioStatus = null,
+                showBatchStatusCard = false,
+                wordLookup = null,
+            )
         }
         val chunkSize = settingsRepository.getReadingPreferences().chunkSize
         runCatching { epubRepository.loadChapter(position.bookId, position.chapterId, chunkSize) }
@@ -515,10 +597,47 @@ class ReaderViewModel @Inject constructor(
                     )
                 }
                 progressRepository.savePosition(position)
+                // Start observing batch status for this chapter.
+                startBatchStatusObservation(chapter)
             }
             .onFailure { e ->
                 _uiState.update { it.copy(error = e.message, isLoading = false) }
             }
+    }
+
+    /**
+     * Observe [AudioDownloadManager.state] for the current chapter's batch status.
+     *
+     * For realtime providers, sets [ReaderUiState.batchAudioStatus] to null (no indicator shown).
+     * For batch providers, seeds the initial status check then streams updates.
+     */
+    private fun startBatchStatusObservation(chapter: Chapter) {
+        batchStatusJob?.cancel()
+        batchStatusJob = viewModelScope.launch {
+            val config = effectiveTtsConfig()
+            if (!config.isBatchProvider) {
+                _uiState.update { it.copy(batchAudioStatus = null) }
+                return@launch
+            }
+            // Seed status check if not yet known.
+            downloadManager.ensureStatusChecked(chapter.id, config)
+
+            // Stream live updates.
+            downloadManager.state
+                .map { it.statusMap[chapter.id] }
+                .distinctUntilChanged()
+                .collect { status ->
+                    val effective = status ?: ChapterAudioStatus.NotDownloaded
+                    _uiState.update { st ->
+                        st.copy(
+                            batchAudioStatus   = effective,
+                            // Auto-dismiss card when download finishes.
+                            showBatchStatusCard = if (effective is ChapterAudioStatus.Downloaded) false
+                                                 else st.showBatchStatusCard
+                        )
+                    }
+                }
+        }
     }
 
     // ── Audio state reset ─────────────────────────────────────────────────────
@@ -591,6 +710,7 @@ class ReaderViewModel @Inject constructor(
         prefetchJob?.cancel()
         lookupJob?.cancel()
         positionTrackJob?.cancel()
+        batchStatusJob?.cancel()
         deleteAllLocalTtsFiles()
         if (::_player.isInitialized) {
             _player.stop(); _player.clearMediaItems(); _player.release()

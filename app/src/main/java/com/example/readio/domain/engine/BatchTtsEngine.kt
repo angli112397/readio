@@ -80,6 +80,15 @@ interface BatchTtsEngine {
     /** Delete all cached audio and intermediate files for [chapterId]. */
     fun clearChapter(chapterId: String)
 
+    /**
+     * Delete all cached audio for [chapterId], also cleaning up any engine-specific
+     * server-side resources (e.g. async job records) associated with [config].
+     *
+     * Default implementation ignores [config] and delegates to [clearChapter].
+     * Override in engines that maintain server-side state (e.g. [GptSoVitsEngine]).
+     */
+    fun clearChapter(chapterId: String, config: TtsConfig) = clearChapter(chapterId)
+
     /** Delete all audio managed by this engine across all chapters. */
     fun clearAll()
 }

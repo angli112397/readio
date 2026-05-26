@@ -31,9 +31,12 @@ private const val TAG = "GptSoVitsEngine"
  * Async flow:
  *   1. POST /v1/jobs (with Idempotency-Key) → 202 Accepted { job_id }
  *   2. GET  /v1/jobs/{job_id}               → { state, progress }
- *      If state == "completed": proceed; else persist job_id and surface HasTaskId.
+ *      If state == "succeeded": proceed; else persist job_id and surface HasTaskId.
  *   3. GET  /v1/jobs/{job_id}/audio         → WAV bytes saved to cacheDir/audio.wav
  *   4. GET  /v1/jobs/{job_id}/manifest      → { sentences: [{id, begin_ms, end_ms}] }
+ *   5. DELETE /v1/jobs/{job_id}            → frees the server job record and the
+ *                                            idempotency key slot so the next POST
+ *                                            for the same chapter creates a fresh job.
  *
  * No authentication headers — the local server is assumed trusted (LAN).
  */
@@ -84,18 +87,38 @@ class GptSoVitsEngine @Inject constructor(
 
         // ── Submit (or resume from saved job_id) ──────────────────────────────
 
-        val jobId = loadTaskId(cacheDir) ?: run {
+        var jobId: String = loadTaskId(cacheDir) ?: run {
             emit(BatchSynthesisEvent.Progress(0, sentences.size, "提交合成任务…"))
-            val id = submit(validSentences, baseUrl, config.gptSoVitsVoice, cacheDir)
-            saveTaskId(cacheDir, id)
-            Log.d(TAG, "Submitted job $id to $baseUrl")
-            id
+            submit(validSentences, baseUrl, config.gptSoVitsVoice, cacheDir).also {
+                saveTaskId(cacheDir, it)
+                Log.d(TAG, "Submitted job $it to $baseUrl")
+            }
         }
 
         // ── Single query — download if ready, otherwise hand back to user ─────
+        //
+        // If the saved job is in a terminal failed/cancelled state (e.g. after a prior
+        // app session that ended mid-synthesis), we DELETE that stale record to free the
+        // idempotency key slot, then submit a fresh job and query once more.
+        // This makes "retry after failure" work without manual user intervention.
 
         emit(BatchSynthesisEvent.Progress(0, sentences.size, "查询任务状态…"))
-        val completed = queryOnce(jobId, baseUrl)
+        val completed = try {
+            queryOnce(jobId, baseUrl)
+        } catch (e: IOException) {
+            Log.w(TAG, "Job $jobId in terminal state (${e.message}), deleting and re-submitting")
+            try { deleteServerJob(jobId, baseUrl) } catch (ex: Exception) {
+                Log.w(TAG, "DELETE stale job $jobId failed: ${ex.message}")
+            }
+            clearTaskId(cacheDir)
+            emit(BatchSynthesisEvent.Progress(0, sentences.size, "提交合成任务…"))
+            jobId = submit(validSentences, baseUrl, config.gptSoVitsVoice, cacheDir).also {
+                saveTaskId(cacheDir, it)
+                Log.d(TAG, "Re-submitted fresh job $it after stale-job cleanup")
+            }
+            // Second query — if this new job also fails immediately, the exception propagates normally.
+            queryOnce(jobId, baseUrl)
+        }
 
         if (completed) {
             emit(BatchSynthesisEvent.Progress(0, sentences.size, "下载音频…"))
@@ -110,6 +133,11 @@ class GptSoVitsEngine @Inject constructor(
                 sentenceCount = timings.size,
                 timings       = timings
             ))
+            // DELETE server job to free the record and idempotency key slot so a future
+            // re-synthesis of the same chapter creates a fresh job rather than resuming this one.
+            try { deleteServerJob(jobId, baseUrl) } catch (e: Exception) {
+                Log.w(TAG, "DELETE completed job $jobId failed (non-fatal): ${e.message}")
+            }
             clearTaskId(cacheDir)
             Log.d(TAG, "Synthesis complete: ${timings.size} timings, file=audio.wav")
             emit(BatchSynthesisEvent.Complete)
@@ -136,6 +164,30 @@ class GptSoVitsEngine @Inject constructor(
     }
 
     override fun clearChapter(chapterId: String) {
+        audioCache.clearChapter(chapterId)
+    }
+
+    /**
+     * Config-aware delete: first cancels the pending server job (if any) so the
+     * idempotency key slot is freed, then removes local cache files.
+     *
+     * Without this, the next POST for the same chapter+config would receive the OLD
+     * job_id via idempotency, which might be in a failed/cancelled state.
+     */
+    override fun clearChapter(chapterId: String, config: TtsConfig) {
+        val url = config.gptSoVitsUrl.trimEnd('/')
+        if (url.isNotEmpty()) {
+            val cacheDir = audioCache.chapterDir(chapterId, config.cacheKey)
+            val taskId   = loadTaskId(cacheDir)
+            if (taskId != null) {
+                try {
+                    deleteServerJob(taskId, url)
+                    Log.d(TAG, "Deleted server job $taskId on clearChapter($chapterId)")
+                } catch (e: Exception) {
+                    Log.w(TAG, "DELETE server job $taskId on clear failed: ${e.message}")
+                }
+            }
+        }
         audioCache.clearChapter(chapterId)
     }
 
@@ -234,7 +286,7 @@ class GptSoVitsEngine @Inject constructor(
             Log.d(TAG, "Poll job=$jobId state=$state body=$body")
 
             return when (state) {
-                "completed" -> true
+                "succeeded" -> true
                 "failed", "cancelled" -> {
                     // Surface the server's error field for diagnosability.
                     val serverError = resp.optString("error", "").ifBlank { null }
@@ -245,7 +297,7 @@ class GptSoVitsEngine @Inject constructor(
                     Log.e(TAG, "Job $jobId $state — server error: $serverError")
                     throw IOException(msg)
                 }
-                else -> false  // queued / processing
+                else -> false  // queued / running
             }
         } finally {
             conn.disconnect()
@@ -291,6 +343,29 @@ class GptSoVitsEngine @Inject constructor(
                     beginMs = s.getLong("begin_ms"),
                     endMs   = s.getLong("end_ms")
                 )
+            }
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    // ── Delete job ────────────────────────────────────────────────────────────
+
+    /**
+     * DELETE /v1/jobs/{job_id}
+     *
+     * Frees the server-side job record and the idempotency key slot.
+     * 404 is silently ignored (job already gone).
+     * Other non-2xx responses are logged but treated as non-fatal.
+     */
+    private fun deleteServerJob(jobId: String, baseUrl: String) {
+        val conn = URL("$baseUrl/v1/jobs/$jobId").openConnection() as HttpURLConnection
+        try {
+            conn.requestMethod = "DELETE"
+            val code = conn.responseCode
+            Log.d(TAG, "DELETE job $jobId → HTTP $code")
+            if (code !in 200..299 && code != 404) {
+                Log.w(TAG, "DELETE job $jobId returned unexpected HTTP $code")
             }
         } finally {
             conn.disconnect()
