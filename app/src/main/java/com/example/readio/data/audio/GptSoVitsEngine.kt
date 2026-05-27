@@ -148,7 +148,8 @@ class GptSoVitsEngine @Inject constructor(
         try {
             conn.requestMethod = "GET"
             val body = readResponse(conn, "List voices")
-            val arr  = JSONObject(body).getJSONArray("voices")
+            // Server returns a plain JSON array: [{voice_id, display_name, …}, …]
+            val arr  = JSONArray(body)
             return List(arr.length()) { i -> parseVoice(arr.getJSONObject(i)) }
                 .sortedBy { it.displayName }
         } finally { conn.disconnect() }
@@ -234,8 +235,10 @@ class GptSoVitsEngine @Inject constructor(
             return when (state) {
                 "succeeded" -> true
                 "failed", "cancelled" -> {
-                    val err = resp.optString("error", "").ifBlank { null }
-                    throw IOException("GPT-SoVITS job $jobId $state" + if (err != null) ": $err" else "")
+                    // error is an object: {"code":"tts_unavailable","message":"…","sentence_id":"…"}
+                    val errMsg = resp.optJSONObject("error")?.optString("message", "")
+                        ?.ifBlank { null }
+                    throw IOException("GPT-SoVITS job $jobId $state" + if (errMsg != null) ": $errMsg" else "")
                 }
                 else -> false
             }
@@ -260,7 +263,12 @@ class GptSoVitsEngine @Inject constructor(
             val arr = JSONObject(readResponse(conn, "Manifest")).getJSONArray("sentences")
             return List(arr.length()) { i ->
                 val s = arr.getJSONObject(i)
-                ServerSentence(s.getString("id"), s.getLong("begin_ms"), s.getLong("end_ms"))
+                ServerSentence(
+                    id             = s.getString("id"),
+                    beginMs        = s.getLong("begin_ms"),
+                    endMs          = s.getLong("end_ms"),
+                    paragraphIndex = s.optInt("paragraph_index", 0),
+                )
             }
         } finally { conn.disconnect() }
     }
@@ -297,7 +305,11 @@ class GptSoVitsEngine @Inject constructor(
 
     private fun mapTimings(serverSentences: List<ServerSentence>, validSentences: List<Sentence>): List<SentenceTiming> =
         serverSentences.mapIndexed { i, ss ->
-            val chunkIdx = validSentences.getOrNull(i)?.chunkIndex ?: validSentences.lastOrNull()?.chunkIndex ?: 0
+            // Server echoes back paragraph_index (= chunkIndex) that we sent in the submit payload.
+            // Fall back to positional lookup in case the server omits the field.
+            val chunkIdx = if (ss.paragraphIndex >= 0) ss.paragraphIndex
+                           else validSentences.getOrNull(i)?.chunkIndex
+                                ?: validSentences.lastOrNull()?.chunkIndex ?: 0
             SentenceTiming(i, ss.beginMs, ss.endMs, chunkIdx)
         }
 
@@ -307,5 +319,10 @@ class GptSoVitsEngine @Inject constructor(
         referenceLanguage = obj.optString("reference_language", "zh"),
     )
 
-    private data class ServerSentence(val id: String, val beginMs: Long, val endMs: Long)
+    private data class ServerSentence(
+        val id: String,
+        val beginMs: Long,
+        val endMs: Long,
+        val paragraphIndex: Int = 0,
+    )
 }
