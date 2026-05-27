@@ -59,10 +59,10 @@ object TextChunker {
      * Latin if >1/3 of sampled characters are ASCII letters.
      */
     private fun isLatin(language: Language, rawTexts: List<String>): Boolean = when (language) {
-        Language.EN                                -> true
-        Language.ZH, Language.JA, Language.KO, Language.YUE -> false
-        Language.UNKNOWN -> {
-            // Sample up to 3 paragraphs to survive chapter-number / title openers.
+        Language.EN -> true
+        Language.ZH -> false
+        else -> {
+            // UNKNOWN / unsupported language: sample first few paragraphs.
             val sample = rawTexts.take(3).joinToString("")
             sample.count { it in 'A'..'Z' || it in 'a'..'z' } > sample.length / 3
         }
