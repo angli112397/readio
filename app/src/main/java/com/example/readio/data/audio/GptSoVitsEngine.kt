@@ -234,11 +234,11 @@ class GptSoVitsEngine @Inject constructor(
             Log.d(TAG, "Poll job=$jobId state=$state")
             return when (state) {
                 "succeeded" -> true
-                "failed", "cancelled" -> {
+                "failed" -> {
                     // error is an object: {"code":"tts_unavailable","message":"…","sentence_id":"…"}
                     val errMsg = resp.optJSONObject("error")?.optString("message", "")
                         ?.ifBlank { null }
-                    throw IOException("GPT-SoVITS job $jobId $state" + if (errMsg != null) ": $errMsg" else "")
+                    throw IOException("GPT-SoVITS job $jobId failed" + if (errMsg != null) ": $errMsg" else "")
                 }
                 else -> false
             }
@@ -292,6 +292,7 @@ class GptSoVitsEngine @Inject constructor(
         val body = (if (code in 200..299) conn.inputStream else conn.errorStream ?: conn.inputStream)
             .use { it.readBytes() }.toString(Charsets.UTF_8)
         if (code == 401) throw IOException("$ctx: 鉴权失败（401），请检查 API Token")
+        if (code == 409) throw IOException("$ctx: Idempotency-Key 冲突（409），请在设置中清除音频缓存后重试")
         if (code !in 200..299) throw IOException("$ctx HTTP $code: $body")
         return body
     }
