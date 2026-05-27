@@ -7,6 +7,7 @@ import com.example.readio.domain.engine.BatchSynthesisEvent
 import com.example.readio.domain.engine.BatchTtsEngine
 import com.example.readio.domain.engine.SentenceTiming
 import com.example.readio.domain.engine.SynthesisManifest
+import com.example.readio.domain.model.GptSoVitsVoice
 import com.example.readio.domain.model.Sentence
 import com.example.readio.domain.model.TtsConfig
 import com.example.readio.domain.model.TtsProvider
@@ -18,6 +19,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 import javax.inject.Inject
@@ -25,21 +27,6 @@ import javax.inject.Singleton
 
 private const val TAG = "GptSoVitsEngine"
 
-/**
- * GPT-SoVITS local GPU inference server (readio-tts API).
- *
- * Async flow:
- *   1. POST /v1/jobs (with Idempotency-Key) → 202 Accepted { job_id }
- *   2. GET  /v1/jobs/{job_id}               → { state, progress }
- *      If state == "succeeded": proceed; else persist job_id and surface HasTaskId.
- *   3. GET  /v1/jobs/{job_id}/audio         → WAV bytes saved to cacheDir/audio.wav
- *   4. GET  /v1/jobs/{job_id}/manifest      → { sentences: [{id, begin_ms, end_ms}] }
- *   5. DELETE /v1/jobs/{job_id}            → frees the server job record and the
- *                                            idempotency key slot so the next POST
- *                                            for the same chapter creates a fresh job.
- *
- * No authentication headers — the local server is assumed trusted (LAN).
- */
 @Singleton
 class GptSoVitsEngine @Inject constructor(
     private val audioCache: AudioCache
@@ -64,68 +51,51 @@ class GptSoVitsEngine @Inject constructor(
 
         val baseUrl = config.gptSoVitsUrl.trimEnd('/')
         if (baseUrl.isEmpty()) {
-            emit(BatchSynthesisEvent.Failed(
-                IOException("GPT-SoVITS 服务器地址未配置，请在设置中填写服务器地址。")
-            ))
+            emit(BatchSynthesisEvent.Failed(IOException("GPT-SoVITS 服务器地址未配置")))
             return@flow
         }
-
-        // voice_id is required by the server (1-64 chars, alphanumeric + hyphens/underscores).
         if (config.gptSoVitsVoice.isBlank()) {
-            emit(BatchSynthesisEvent.Failed(
-                IOException("Voice ID 未配置，请在设置 > GPT-SoVITS 中填写 Voice ID。")
-            ))
+            emit(BatchSynthesisEvent.Failed(IOException("Voice ID 未配置，请在设置中选择音色")))
             return@flow
         }
 
-        // Filter sentences that become blank after TTS cleaning; send the rest in order.
+        val token    = config.gptSoVitsApiToken
+        val textLang = config.gptSoVitsTextLanguage.ifBlank { "zh" }
+
         val validSentences = sentences.filter { cleanForTts(it.text).isNotBlank() }
         if (validSentences.isEmpty()) {
             emit(BatchSynthesisEvent.Failed(IOException("章节文本清理后为空")))
             return@flow
         }
 
-        // ── Submit (or resume from saved job_id) ──────────────────────────────
-
         var jobId: String = loadTaskId(cacheDir) ?: run {
             emit(BatchSynthesisEvent.Progress(0, sentences.size, "提交合成任务…"))
-            submit(validSentences, baseUrl, config.gptSoVitsVoice, cacheDir).also {
+            submit(validSentences, baseUrl, config.gptSoVitsVoice, textLang, token, cacheDir).also {
                 saveTaskId(cacheDir, it)
                 Log.d(TAG, "Submitted job $it to $baseUrl")
             }
         }
 
-        // ── Single query — download if ready, otherwise hand back to user ─────
-        //
-        // If the saved job is in a terminal failed/cancelled state (e.g. after a prior
-        // app session that ended mid-synthesis), we DELETE that stale record to free the
-        // idempotency key slot, then submit a fresh job and query once more.
-        // This makes "retry after failure" work without manual user intervention.
-
         emit(BatchSynthesisEvent.Progress(0, sentences.size, "查询任务状态…"))
         val completed = try {
-            queryOnce(jobId, baseUrl)
+            queryOnce(jobId, baseUrl, token)
         } catch (e: IOException) {
-            Log.w(TAG, "Job $jobId in terminal state (${e.message}), deleting and re-submitting")
-            try { deleteServerJob(jobId, baseUrl) } catch (ex: Exception) {
-                Log.w(TAG, "DELETE stale job $jobId failed: ${ex.message}")
-            }
+            Log.w(TAG, "Job $jobId terminal (${e.message}), re-submitting")
+            try { deleteServerJob(jobId, baseUrl, token) } catch (ex: Exception) { }
             clearTaskId(cacheDir)
             emit(BatchSynthesisEvent.Progress(0, sentences.size, "提交合成任务…"))
-            jobId = submit(validSentences, baseUrl, config.gptSoVitsVoice, cacheDir).also {
+            jobId = submit(validSentences, baseUrl, config.gptSoVitsVoice, textLang, token, cacheDir).also {
                 saveTaskId(cacheDir, it)
-                Log.d(TAG, "Re-submitted fresh job $it after stale-job cleanup")
+                Log.d(TAG, "Re-submitted fresh job $it")
             }
-            // Second query — if this new job also fails immediately, the exception propagates normally.
-            queryOnce(jobId, baseUrl)
+            queryOnce(jobId, baseUrl, token)
         }
 
         if (completed) {
             emit(BatchSynthesisEvent.Progress(0, sentences.size, "下载音频…"))
             val audioFile = File(cacheDir, "audio.wav")
-            downloadAudio(jobId, baseUrl, audioFile)
-
-            val serverManifest = downloadManifest(jobId, baseUrl)
+            downloadAudio(jobId, baseUrl, token, audioFile)
+            val serverManifest = downloadManifest(jobId, baseUrl, token)
             val timings = mapTimings(serverManifest, validSentences)
             audioCache.writeManifest(cacheDir, SynthesisManifest(
                 format        = AudioFormat.SINGLE_FILE,
@@ -133,21 +103,13 @@ class GptSoVitsEngine @Inject constructor(
                 sentenceCount = timings.size,
                 timings       = timings
             ))
-            // DELETE server job to free the record and idempotency key slot so a future
-            // re-synthesis of the same chapter creates a fresh job rather than resuming this one.
-            try { deleteServerJob(jobId, baseUrl) } catch (e: Exception) {
-                Log.w(TAG, "DELETE completed job $jobId failed (non-fatal): ${e.message}")
-            }
+            try { deleteServerJob(jobId, baseUrl, token) } catch (e: Exception) { }
             clearTaskId(cacheDir)
-            Log.d(TAG, "Synthesis complete: ${timings.size} timings, file=audio.wav")
             emit(BatchSynthesisEvent.Complete)
         } else {
-            Log.d(TAG, "Job $jobId not ready yet → HasTaskId")
             emit(BatchSynthesisEvent.Submitted(jobId))
         }
     }.flowOn(Dispatchers.IO)
-
-    // ── BatchTtsEngine: cache access ──────────────────────────────────────────
 
     override fun loadManifest(cacheDir: File): SynthesisManifest? =
         audioCache.readManifest(cacheDir)
@@ -159,239 +121,191 @@ class GptSoVitsEngine @Inject constructor(
         loadTaskId(audioCache.chapterDir(chapterId, config.cacheKey))
 
     override fun importTaskId(chapterId: String, taskId: String, config: TtsConfig) {
-        val dir = audioCache.chapterDir(chapterId, config.cacheKey)
-        saveTaskId(dir, taskId)
+        saveTaskId(audioCache.chapterDir(chapterId, config.cacheKey), taskId)
     }
 
     override fun clearChapter(chapterId: String) {
         audioCache.clearChapter(chapterId)
     }
 
-    /**
-     * Config-aware delete: first cancels the pending server job (if any) so the
-     * idempotency key slot is freed, then removes local cache files.
-     *
-     * Without this, the next POST for the same chapter+config would receive the OLD
-     * job_id via idempotency, which might be in a failed/cancelled state.
-     */
     override fun clearChapter(chapterId: String, config: TtsConfig) {
-        val url = config.gptSoVitsUrl.trimEnd('/')
+        val url   = config.gptSoVitsUrl.trimEnd('/')
+        val token = config.gptSoVitsApiToken
         if (url.isNotEmpty()) {
             val cacheDir = audioCache.chapterDir(chapterId, config.cacheKey)
             val taskId   = loadTaskId(cacheDir)
             if (taskId != null) {
-                try {
-                    deleteServerJob(taskId, url)
-                    Log.d(TAG, "Deleted server job $taskId on clearChapter($chapterId)")
-                } catch (e: Exception) {
-                    Log.w(TAG, "DELETE server job $taskId on clear failed: ${e.message}")
-                }
+                try { deleteServerJob(taskId, url, token) } catch (e: Exception) { }
             }
         }
         audioCache.clearChapter(chapterId)
     }
 
-    override fun clearAll() {
-        audioCache.clearAll()
+    override fun clearAll() { audioCache.clearAll() }
+
+    fun listVoices(baseUrl: String, token: String): List<GptSoVitsVoice> {
+        val conn = openConn("$baseUrl/v1/voices", token)
+        try {
+            conn.requestMethod = "GET"
+            val body = readResponse(conn, "List voices")
+            val arr  = JSONObject(body).getJSONArray("voices")
+            return List(arr.length()) { i -> parseVoice(arr.getJSONObject(i)) }
+                .sortedBy { it.displayName }
+        } finally { conn.disconnect() }
     }
 
-    // ── Task ID persistence ───────────────────────────────────────────────────
+    fun uploadVoice(
+        displayName: String, referenceLanguage: String, transcript: String,
+        audioBytes: ByteArray, baseUrl: String, token: String
+    ): GptSoVitsVoice {
+        val boundary = "Readio-${System.currentTimeMillis()}"
+        val conn = openConn("$baseUrl/v1/voices", token)
+        try {
+            conn.requestMethod = "POST"
+            conn.setRequestProperty("Content-Type", "multipart/form-data; boundary=$boundary")
+            conn.doOutput = true
+            conn.outputStream.buffered().use { out ->
+                writeTextPart(out, boundary, "display_name",       displayName)
+                writeTextPart(out, boundary, "reference_language", referenceLanguage)
+                writeTextPart(out, boundary, "transcript",         transcript)
+                out.write("--$boundary\r\n".toByteArray())
+                out.write("Content-Disposition: form-data; name=\"audio\"; filename=\"reference.wav\"\r\n".toByteArray())
+                out.write("Content-Type: audio/wav\r\n\r\n".toByteArray())
+                out.write(audioBytes)
+                out.write("\r\n--$boundary--\r\n".toByteArray())
+            }
+            return parseVoice(JSONObject(readResponse(conn, "Upload voice")))
+        } finally { conn.disconnect() }
+    }
+
+    fun deleteVoice(voiceId: String, baseUrl: String, token: String) {
+        val conn = openConn("$baseUrl/v1/voices/$voiceId", token)
+        try {
+            conn.requestMethod = "DELETE"
+            val code = conn.responseCode
+            if (code !in 200..299 && code != 404) throw IOException("Delete voice HTTP $code")
+        } finally { conn.disconnect() }
+    }
 
     private fun loadTaskId(cacheDir: File): String? {
         val f = File(cacheDir, "task.id")
         return if (f.exists()) f.readText().trim().takeIf { it.isNotEmpty() } else null
     }
-
     private fun saveTaskId(cacheDir: File, jobId: String) {
-        cacheDir.mkdirs()
-        File(cacheDir, "task.id").writeText(jobId)
+        cacheDir.mkdirs(); File(cacheDir, "task.id").writeText(jobId)
     }
+    private fun clearTaskId(cacheDir: File) { File(cacheDir, "task.id").delete() }
 
-    private fun clearTaskId(cacheDir: File) {
-        File(cacheDir, "task.id").delete()
-    }
-
-    // ── Submit ────────────────────────────────────────────────────────────────
-
-    /**
-     * POST /v1/jobs
-     *
-     * Idempotency-Key = cacheDir.absolutePath so retrying the same chapter+config
-     * always returns the same existing job rather than creating a duplicate.
-     *
-     * [voiceId] must be non-blank (validated by [synthesize] before calling here).
-     * It references a folder under `references/gpt/` on the server.
-     */
     private fun submit(
-        sentences: List<Sentence>,
-        baseUrl: String,
-        voiceId: String,
-        cacheDir: File
+        sentences: List<Sentence>, baseUrl: String, voiceId: String,
+        textLanguage: String, token: String, cacheDir: File
     ): String {
-        val sentencesArray = JSONArray().apply {
+        val sentArr = JSONArray().apply {
             sentences.forEachIndexed { idx, s ->
                 put(JSONObject().apply {
-                    put("id",              idx.toString())
-                    put("text",            cleanForTts(s.text))
+                    put("id", idx.toString()); put("text", cleanForTts(s.text))
                     put("paragraph_index", s.chunkIndex)
                 })
             }
         }
         val payload = JSONObject().apply {
-            put("chapter_id",      cacheDir.absolutePath)
-            put("voice_id",        voiceId)   // required by server (validated non-blank before submit)
-            put("sentence_gap_ms", 600)
-            put("sentences",       sentencesArray)
+            put("chapter_id", cacheDir.absolutePath); put("voice_id", voiceId)
+            put("text_language", textLanguage); put("sentence_gap_ms", 600)
+            put("sentences", sentArr)
         }
-
-        val conn = URL("$baseUrl/v1/jobs").openConnection() as HttpURLConnection
+        val conn = openConn("$baseUrl/v1/jobs", token)
         try {
             conn.requestMethod = "POST"
             conn.setRequestProperty("Content-Type", "application/json")
             conn.setRequestProperty("Idempotency-Key", cacheDir.absolutePath)
             conn.doOutput = true
             conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
-
-            val code = conn.responseCode
-            val body = (if (code in 200..299) conn.inputStream else conn.errorStream ?: conn.inputStream)
-                .use { it.readBytes() }.toString(Charsets.UTF_8)
-            if (code !in 200..299) throw IOException("Submit HTTP $code: $body")
-
-            return JSONObject(body).getString("job_id")
-        } finally {
-            conn.disconnect()
-        }
+            return JSONObject(readResponse(conn, "Submit job")).getString("job_id")
+        } finally { conn.disconnect() }
     }
 
-    // ── Poll ──────────────────────────────────────────────────────────────────
-
-    /**
-     * GET /v1/jobs/{job_id}
-     *
-     * Returns true if the job is complete, false if still queued/processing.
-     * Throws [IOException] on server-side failure or cancellation, with the server's
-     * `error` field included in the message for diagnosability.
-     */
-    private fun queryOnce(jobId: String, baseUrl: String): Boolean {
-        val conn = URL("$baseUrl/v1/jobs/$jobId").openConnection() as HttpURLConnection
+    private fun queryOnce(jobId: String, baseUrl: String, token: String): Boolean {
+        val conn = openConn("$baseUrl/v1/jobs/$jobId", token)
         try {
             conn.requestMethod = "GET"
-            val code = conn.responseCode
-            val body = (if (code in 200..299) conn.inputStream else conn.errorStream ?: conn.inputStream)
-                .use { it.readBytes() }.toString(Charsets.UTF_8)
-            if (code !in 200..299) throw IOException("Poll HTTP $code: $body")
-
-            val resp  = JSONObject(body)
+            val resp  = JSONObject(readResponse(conn, "Poll job"))
             val state = resp.getString("state")
-            Log.d(TAG, "Poll job=$jobId state=$state body=$body")
-
+            Log.d(TAG, "Poll job=$jobId state=$state")
             return when (state) {
                 "succeeded" -> true
                 "failed", "cancelled" -> {
-                    // Surface the server's error field for diagnosability.
-                    val serverError = resp.optString("error", "").ifBlank { null }
-                    val msg = buildString {
-                        append("GPT-SoVITS job $jobId $state")
-                        if (serverError != null) append(": $serverError")
-                    }
-                    Log.e(TAG, "Job $jobId $state — server error: $serverError")
-                    throw IOException(msg)
+                    val err = resp.optString("error", "").ifBlank { null }
+                    throw IOException("GPT-SoVITS job $jobId $state" + if (err != null) ": $err" else "")
                 }
-                else -> false  // queued / running
+                else -> false
             }
-        } finally {
-            conn.disconnect()
-        }
+        } finally { conn.disconnect() }
     }
 
-    // ── Download audio ────────────────────────────────────────────────────────
-
-    /** GET /v1/jobs/{job_id}/audio — streams WAV bytes to [dest]. */
-    private fun downloadAudio(jobId: String, baseUrl: String, dest: File) {
-        val conn = URL("$baseUrl/v1/jobs/$jobId/audio").openConnection() as HttpURLConnection
+    private fun downloadAudio(jobId: String, baseUrl: String, token: String, dest: File) {
+        val conn = openConn("$baseUrl/v1/jobs/$jobId/audio", token)
         try {
-            conn.connect()
-            if (conn.responseCode != 200)
-                throw IOException("Audio download HTTP ${conn.responseCode}")
+            val code = conn.responseCode
+            if (code == 401) throw IOException("音频下载鉴权失败（401），请检查 API Token")
+            if (code != 200) throw IOException("Audio download HTTP $code")
             dest.parentFile?.mkdirs()
             conn.inputStream.use { it.copyTo(dest.outputStream()) }
-        } finally {
-            conn.disconnect()
-        }
+        } finally { conn.disconnect() }
     }
 
-    // ── Download manifest ─────────────────────────────────────────────────────
-
-    /**
-     * GET /v1/jobs/{job_id}/manifest
-     * Response: { "sentences": [{ "id": "0", "begin_ms": 0, "end_ms": 2840 }, …] }
-     */
-    private fun downloadManifest(jobId: String, baseUrl: String): List<ServerSentence> {
-        val conn = URL("$baseUrl/v1/jobs/$jobId/manifest").openConnection() as HttpURLConnection
+    private fun downloadManifest(jobId: String, baseUrl: String, token: String): List<ServerSentence> {
+        val conn = openConn("$baseUrl/v1/jobs/$jobId/manifest", token)
         try {
             conn.requestMethod = "GET"
-            val code = conn.responseCode
-            val body = (if (code in 200..299) conn.inputStream else conn.errorStream ?: conn.inputStream)
-                .use { it.readBytes() }.toString(Charsets.UTF_8)
-            if (code !in 200..299) throw IOException("Manifest HTTP $code: $body")
-
-            val arr = JSONObject(body).getJSONArray("sentences")
+            val arr = JSONObject(readResponse(conn, "Manifest")).getJSONArray("sentences")
             return List(arr.length()) { i ->
                 val s = arr.getJSONObject(i)
-                ServerSentence(
-                    id      = s.getString("id"),
-                    beginMs = s.getLong("begin_ms"),
-                    endMs   = s.getLong("end_ms")
-                )
+                ServerSentence(s.getString("id"), s.getLong("begin_ms"), s.getLong("end_ms"))
             }
-        } finally {
-            conn.disconnect()
-        }
+        } finally { conn.disconnect() }
     }
 
-    // ── Delete job ────────────────────────────────────────────────────────────
-
-    /**
-     * DELETE /v1/jobs/{job_id}
-     *
-     * Frees the server-side job record and the idempotency key slot.
-     * 404 is silently ignored (job already gone).
-     * Other non-2xx responses are logged but treated as non-fatal.
-     */
-    private fun deleteServerJob(jobId: String, baseUrl: String) {
-        val conn = URL("$baseUrl/v1/jobs/$jobId").openConnection() as HttpURLConnection
+    private fun deleteServerJob(jobId: String, baseUrl: String, token: String) {
+        val conn = openConn("$baseUrl/v1/jobs/$jobId", token)
         try {
             conn.requestMethod = "DELETE"
             val code = conn.responseCode
-            Log.d(TAG, "DELETE job $jobId → HTTP $code")
-            if (code !in 200..299 && code != 404) {
-                Log.w(TAG, "DELETE job $jobId returned unexpected HTTP $code")
-            }
-        } finally {
-            conn.disconnect()
-        }
+            Log.d(TAG, "DELETE job $jobId -> HTTP $code")
+        } finally { conn.disconnect() }
     }
 
-    // ── Timing mapping ────────────────────────────────────────────────────────
+    private fun openConn(url: String, token: String): HttpURLConnection =
+        (URL(url).openConnection() as HttpURLConnection).also { c ->
+            if (token.isNotEmpty()) c.setRequestProperty("Authorization", "Bearer $token")
+        }
 
-    /**
-     * Maps server manifest sentences → [SentenceTiming].
-     *
-     * The server preserves input order and the `id` field equals the submit index,
-     * so [serverSentences][i] corresponds to [validSentences][i].
-     * [chunkIndex] is read from [validSentences] to drive ChunkWheel sync.
-     */
-    private fun mapTimings(
-        serverSentences: List<ServerSentence>,
-        validSentences: List<Sentence>
-    ): List<SentenceTiming> =
+    private fun readResponse(conn: HttpURLConnection, ctx: String): String {
+        val code = conn.responseCode
+        val body = (if (code in 200..299) conn.inputStream else conn.errorStream ?: conn.inputStream)
+            .use { it.readBytes() }.toString(Charsets.UTF_8)
+        if (code == 401) throw IOException("$ctx: 鉴权失败（401），请检查 API Token")
+        if (code !in 200..299) throw IOException("$ctx HTTP $code: $body")
+        return body
+    }
+
+    private fun writeTextPart(out: OutputStream, boundary: String, name: String, value: String) {
+        out.write("--$boundary\r\n".toByteArray())
+        out.write("Content-Disposition: form-data; name=\"$name\"\r\n\r\n".toByteArray())
+        out.write(value.toByteArray(Charsets.UTF_8))
+        out.write("\r\n".toByteArray())
+    }
+
+    private fun mapTimings(serverSentences: List<ServerSentence>, validSentences: List<Sentence>): List<SentenceTiming> =
         serverSentences.mapIndexed { i, ss ->
-            val chunkIdx = validSentences.getOrNull(i)?.chunkIndex
-                ?: validSentences.lastOrNull()?.chunkIndex ?: 0
+            val chunkIdx = validSentences.getOrNull(i)?.chunkIndex ?: validSentences.lastOrNull()?.chunkIndex ?: 0
             SentenceTiming(i, ss.beginMs, ss.endMs, chunkIdx)
         }
 
-    // ── Internal data types ───────────────────────────────────────────────────
+    private fun parseVoice(obj: JSONObject): GptSoVitsVoice = GptSoVitsVoice(
+        id = obj.getString("voice_id"),
+        displayName = obj.optString("display_name", obj.getString("voice_id")),
+        referenceLanguage = obj.optString("reference_language", "zh"),
+    )
 
     private data class ServerSentence(val id: String, val beginMs: Long, val endMs: Long)
 }

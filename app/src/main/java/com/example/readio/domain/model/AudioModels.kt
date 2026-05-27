@@ -15,22 +15,31 @@ data class TtsConfig(
     val androidLocale: String = "zh-CN",
     // VOLCENGINE — 精品长文本 v1 API (cloud only)
     val volcAppId: String = "",
-    val volcAccessKey: String = "",   // Bearer token
-    val volcSpeaker: String = "",     // voice_type (e.g. "BV406_V2_streaming")
-    // GPT_SO_VITS — local GPU inference server (readio-tts API, no auth)
+    val volcAccessKey: String = "",        // Bearer token
+    val volcSpeaker: String = "",          // voice_type (e.g. "BV406_V2_streaming")
+    // GPT_SO_VITS — local GPU inference server (readio-tts API)
     val gptSoVitsUrl: String = "",
-    val gptSoVitsVoice: String = "",  // voice_id referencing references/gpt/; empty = server default
+    val gptSoVitsApiToken: String = "",    // Bearer token for Authorization header
+    val gptSoVitsVoice: String = "",       // voice_id installed on the server
+    /**
+     * Default synthesis language sent as `text_language` in job submissions.
+     * Overridden at synthesis time by the book's detected language when available.
+     * Accepted values: "zh", "en", "ja", "ko", "yue".
+     */
+    val gptSoVitsTextLanguage: String = "zh",
     // Common
     val speechRate: Float = 1.0f
 ) {
     /**
      * Cache key encodes the synthesis parameters that affect audio content.
      * Speech rate is excluded — applied locally via ExoPlayer setPlaybackSpeed.
+     * API token is excluded — it doesn't affect audio content.
+     * text_language IS included for GPT-SoVITS: same voice + different language → different audio.
      */
     val cacheKey: String get() = when (provider) {
         TtsProvider.LOCAL_ANDROID -> "LOCAL|$androidLocale"
         TtsProvider.VOLCENGINE    -> "VOLC|$volcSpeaker"
-        TtsProvider.GPT_SO_VITS   -> "GPT|$gptSoVitsVoice"
+        TtsProvider.GPT_SO_VITS   -> "GPT|$gptSoVitsVoice|$gptSoVitsTextLanguage"
     }
 
     /** True when the active TTS provider supports batch pre-download. */

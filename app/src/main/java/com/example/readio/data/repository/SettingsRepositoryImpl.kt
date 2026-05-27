@@ -34,14 +34,16 @@ class SettingsRepositoryImpl @Inject constructor(
 
     override suspend fun saveTtsConfig(config: TtsConfig) {
         dataStore.edit { prefs ->
-            prefs[Keys.PROVIDER]            = config.provider.name
-            prefs[Keys.ANDROID_LOCALE]      = config.androidLocale
-            prefs[Keys.VOLC_APP_ID]         = config.volcAppId
-            prefs[Keys.VOLC_ACCESS_KEY]     = config.volcAccessKey
-            prefs[Keys.VOLC_SPEAKER]        = config.volcSpeaker
-            prefs[Keys.GPT_SO_VITS_URL]     = config.gptSoVitsUrl
-            prefs[Keys.GPT_SO_VITS_VOICE]   = config.gptSoVitsVoice
-            prefs[Keys.SPEECH_RATE]         = config.speechRate
+            prefs[Keys.PROVIDER]                  = config.provider.name
+            prefs[Keys.ANDROID_LOCALE]            = config.androidLocale
+            prefs[Keys.VOLC_APP_ID]               = config.volcAppId
+            prefs[Keys.VOLC_ACCESS_KEY]           = config.volcAccessKey
+            prefs[Keys.VOLC_SPEAKER]              = config.volcSpeaker
+            prefs[Keys.GPT_SO_VITS_URL]           = config.gptSoVitsUrl
+            prefs[Keys.GPT_SO_VITS_TOKEN]         = config.gptSoVitsApiToken
+            prefs[Keys.GPT_SO_VITS_VOICE]         = config.gptSoVitsVoice
+            prefs[Keys.GPT_SO_VITS_TEXT_LANG]     = config.gptSoVitsTextLanguage
+            prefs[Keys.SPEECH_RATE]               = config.speechRate
         }
     }
 
@@ -75,12 +77,14 @@ class SettingsRepositoryImpl @Inject constructor(
         volcAccessKey  = this[Keys.VOLC_ACCESS_KEY]    ?: "",
         volcSpeaker    = this[Keys.VOLC_SPEAKER]       ?: "",
         // Migrate Fish Speech URL (tts_fish_speech_url) and older VOLC_SERVER_URL on first read.
-        gptSoVitsUrl   = this[Keys.GPT_SO_VITS_URL]
-                         ?: this[Keys.FISH_SPEECH_URL]   // legacy: Fish Speech server URL
-                         ?: this[Keys.VOLC_SERVER_URL]   // legacy: even older key
-                         ?: "",
-        gptSoVitsVoice = this[Keys.GPT_SO_VITS_VOICE] ?: "",
-        speechRate     = this[Keys.SPEECH_RATE]        ?: 1.0f
+        gptSoVitsUrl          = this[Keys.GPT_SO_VITS_URL]
+                               ?: this[Keys.FISH_SPEECH_URL]   // legacy: Fish Speech server URL
+                               ?: this[Keys.VOLC_SERVER_URL]   // legacy: even older key
+                               ?: "",
+        gptSoVitsApiToken     = this[Keys.GPT_SO_VITS_TOKEN]     ?: "",
+        gptSoVitsVoice        = this[Keys.GPT_SO_VITS_VOICE]     ?: "",
+        gptSoVitsTextLanguage = this[Keys.GPT_SO_VITS_TEXT_LANG] ?: "zh",
+        speechRate            = this[Keys.SPEECH_RATE]           ?: 1.0f
     )
 
     private fun Preferences.toReadingPreferences() = ReadingPreferences(
@@ -106,8 +110,10 @@ class SettingsRepositoryImpl @Inject constructor(
         val VOLC_SPEAKER         = stringPreferencesKey("tts_volc_speaker")
         val VOLC_SERVER_URL      = stringPreferencesKey("tts_volc_server_url")   // legacy (v0.5)
         val FISH_SPEECH_URL      = stringPreferencesKey("tts_fish_speech_url")   // legacy (v0.7)
-        val GPT_SO_VITS_URL      = stringPreferencesKey("tts_gpt_so_vits_url")
-        val GPT_SO_VITS_VOICE    = stringPreferencesKey("tts_gpt_so_vits_voice")
+        val GPT_SO_VITS_URL       = stringPreferencesKey("tts_gpt_so_vits_url")
+        val GPT_SO_VITS_TOKEN     = stringPreferencesKey("tts_gpt_so_vits_token")
+        val GPT_SO_VITS_VOICE     = stringPreferencesKey("tts_gpt_so_vits_voice")
+        val GPT_SO_VITS_TEXT_LANG = stringPreferencesKey("tts_gpt_so_vits_text_lang")
         val SPEECH_RATE          = floatPreferencesKey("tts_speech_rate")
         val CHUNK_SIZE           = intPreferencesKey("tts_chunk_size")
         val FONT_SIZE            = intPreferencesKey("reading_font_size")

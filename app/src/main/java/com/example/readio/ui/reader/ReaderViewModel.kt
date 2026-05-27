@@ -20,7 +20,10 @@ import com.example.readio.domain.model.Chapter
 import com.example.readio.domain.model.ChapterAudio
 import com.example.readio.domain.model.ChapterAudioStatus
 import com.example.readio.domain.model.EpubBook
+import com.example.readio.domain.model.Language
 import com.example.readio.domain.model.TtsConfig
+import com.example.readio.domain.model.TtsProvider
+import com.example.readio.domain.model.toGptTextLang
 import com.example.readio.domain.model.ReadingPosition
 import com.example.readio.domain.model.ReadingPreferences
 import com.example.readio.domain.repository.ChapterAudioState
@@ -405,10 +408,21 @@ class ReaderViewModel @Inject constructor(
     /**
      * Returns the TTS config to use for the current book:
      * the global config with the book's per-book provider/voice override applied (if set).
+     *
+     * For GPT-SoVITS, [TtsConfig.gptSoVitsTextLanguage] is overridden with the chapter's
+     * detected language so the server always receives the correct `text_language` value
+     * regardless of the global fallback setting.
      */
     private suspend fun effectiveTtsConfig(): TtsConfig {
         val global = settingsRepository.getTtsConfig()
-        return global.applyBookOverride(currentBook?.ttsProvider, currentBook?.ttsVoice)
+        var config = global.applyBookOverride(currentBook?.ttsProvider, currentBook?.ttsVoice)
+        if (config.provider == TtsProvider.GPT_SO_VITS) {
+            val bookLang = _uiState.value.chapter?.language ?: Language.UNKNOWN
+            if (bookLang != Language.UNKNOWN) {
+                config = config.copy(gptSoVitsTextLanguage = bookLang.toGptTextLang())
+            }
+        }
+        return config
     }
 
     private fun generateAndPlay() {
